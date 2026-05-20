@@ -6,7 +6,7 @@ use std::env;
 use std::process;
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
-use cdp::{probe_session, search_doi};
+use cdp::{probe_session, request_doi, search_doi};
 use queue::{AddResult, Queue, RemoveResult, default_queue_path, normalize_doi};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -117,7 +117,31 @@ fn run() -> Result<(), String> {
 
             println!("{json}");
         }
-        Some("request" | "watch" | "fetch" | "approve") => {
+        Some("request") => {
+            let Some(doi) = args.next() else {
+                return Err("request: missing DOI".to_string());
+            };
+
+            let reward = parse_reward(args)?;
+            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
+            let browser = detect_browser().map_err(|error| error.to_string())?;
+            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+            let cdp_browser = browser
+                .launch_cdp(&profile_dir)
+                .map_err(|error| error.to_string())?;
+            let response = request_doi(cdp_browser.port(), SCINET_URL, &doi, reward)
+                .map_err(|error| error.to_string())?;
+
+            if response.looks_logged_out() {
+                return Err("not logged into Sci-Net; run `snq login` first".to_string());
+            }
+
+            let json =
+                serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?;
+
+            println!("{json}");
+        }
+        Some("watch" | "fetch" | "approve") => {
             return Err("command is scaffolded but not implemented yet".to_string());
         }
         Some(command) => {
@@ -128,6 +152,32 @@ fn run() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn parse_reward(args: impl Iterator<Item = String>) -> Result<u32, String> {
+    let mut reward = 1;
+    let mut args = args.peekable();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--reward" | "-r" => {
+                let Some(value) = args.next() else {
+                    return Err("request: missing value for --reward".to_string());
+                };
+
+                reward = value
+                    .parse()
+                    .map_err(|_| format!("request: invalid reward `{value}`"))?;
+
+                if reward == 0 {
+                    return Err("request: reward must be greater than zero".to_string());
+                }
+            }
+            unknown => return Err(format!("request: unknown option `{unknown}`")),
+        }
+    }
+
+    Ok(reward)
 }
 
 fn print_help() {
@@ -154,4 +204,33 @@ Options:
   -V, --version    Print version
 "
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reward_defaults_to_one() {
+        assert_eq!(parse_reward(std::iter::empty()).unwrap(), 1);
+    }
+
+    #[test]
+    fn reward_accepts_long_and_short_flags() {
+        assert_eq!(
+            parse_reward(["--reward", "3"].into_iter().map(str::to_string)).unwrap(),
+            3
+        );
+        assert_eq!(
+            parse_reward(["-r", "2"].into_iter().map(str::to_string)).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn reward_rejects_zero_missing_and_unknown_values() {
+        assert!(parse_reward(["--reward", "0"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_reward(["--reward"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_reward(["--foo"].into_iter().map(str::to_string)).is_err());
+    }
 }

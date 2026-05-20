@@ -114,19 +114,43 @@ pub fn probe_session(port: u16, url: &str) -> Result<SessionProbe, CdpError> {
 }
 
 pub fn search_doi(port: u16, url: &str, doi: &str) -> Result<ScinetResponse, CdpError> {
+    scinet_post(port, url, "/search", json!({ "doi": doi }))
+}
+
+pub fn request_doi(
+    port: u16,
+    url: &str,
+    doi: &str,
+    reward: u32,
+) -> Result<ScinetResponse, CdpError> {
+    scinet_post(
+        port,
+        url,
+        "/request",
+        json!({ "doi": doi, "reward": reward }),
+    )
+}
+
+fn scinet_post(
+    port: u16,
+    url: &str,
+    path: &str,
+    payload: Value,
+) -> Result<ScinetResponse, CdpError> {
     let target = page_target(port)?;
     let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
-    let doi = serde_json::to_string(doi)?;
+    let path = serde_json::to_string(path)?;
+    let payload = serde_json::to_string(&payload)?;
 
     cdp.navigate(url)?;
 
     let value = cdp.evaluate_json(&format!(
         r#"(async () => {{
-            const response = await fetch('/search', {{
+            const response = await fetch({path}, {{
                 method: 'POST',
                 credentials: 'include',
                 headers: {{ 'content-type': 'application/json' }},
-                body: JSON.stringify({{ doi: {doi} }})
+                body: JSON.stringify({payload})
             }});
             const text = await response.text();
             let body;
