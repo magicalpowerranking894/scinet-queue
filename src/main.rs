@@ -1,5 +1,6 @@
 mod app;
 mod args;
+mod bidi;
 mod browser;
 mod cdp;
 mod doctor;

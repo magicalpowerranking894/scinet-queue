@@ -1,7 +1,7 @@
 use serde::Serialize;
 
-use crate::browser::{BrowserEngine, detect_browser, profile_dir};
-use crate::page::CdpPageSession;
+use crate::browser::{detect_browser, profile_dir};
+use crate::page::connect_page_session;
 use crate::queue::{Queue, default_queue_path};
 use crate::scinet::{SCINET_URL, probe_session};
 
@@ -98,23 +98,9 @@ pub(crate) fn doctor_report(queue: &Queue) -> DoctorReport {
                     message: "resolved".to_string(),
                 };
 
-                if browser.engine != BrowserEngine::Chromium {
-                    (
-                        profile_info,
-                        DoctorSession {
-                            ok: false,
-                            logged_in: None,
-                            url: None,
-                            title: None,
-                            message: format!(
-                                "session probe is not implemented for {} yet",
-                                browser.engine
-                            ),
-                        },
-                    )
-                } else {
-                    let session_info = match browser.launch_cdp(&path) {
-                        Ok(cdp_browser) => match CdpPageSession::connect(cdp_browser.port()) {
+                let session_info = match browser.launch_session(&path, true) {
+                    Ok(session_browser) => {
+                        match connect_page_session(browser.engine, session_browser.port()) {
                             Ok(mut page) => match probe_session(&mut page, SCINET_URL) {
                                 Ok(probe) => {
                                     let logged_in = probe.is_logged_in();
@@ -146,18 +132,18 @@ pub(crate) fn doctor_report(queue: &Queue) -> DoctorReport {
                                 title: None,
                                 message: error.to_string(),
                             },
-                        },
-                        Err(error) => DoctorSession {
-                            ok: false,
-                            logged_in: None,
-                            url: None,
-                            title: None,
-                            message: error.to_string(),
-                        },
-                    };
+                        }
+                    }
+                    Err(error) => DoctorSession {
+                        ok: false,
+                        logged_in: None,
+                        url: None,
+                        title: None,
+                        message: error.to_string(),
+                    },
+                };
 
-                    (profile_info, session_info)
-                }
+                (profile_info, session_info)
             }
             Err(error) => (
                 DoctorProfile {

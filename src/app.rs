@@ -11,7 +11,7 @@ use crate::output::{
     RequestOutput, SessionOutput, ViewOutput, WatchOutput, compact_text, format_response,
     print_help, print_json,
 };
-use crate::page::{CdpPageSession, PageError};
+use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
 use crate::papers::{extract_dois, fetch_dois, fetch_one, read_import_text};
 use crate::queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
@@ -122,15 +122,15 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
 
             if login.wait {
-                let cdp_browser = browser
-                    .launch_login_cdp(&profile_dir)
+                let session_browser = browser
+                    .launch_session(&profile_dir, false)
                     .map_err(|error| error.to_string())?;
 
                 println!("opened {}", browser.engine);
                 println!("profile {}", profile_dir.display());
                 println!("waiting for Sci-Net login; press Ctrl-C to cancel");
 
-                wait_for_login(cdp_browser.port())?;
+                wait_for_login(browser.engine, session_browser.port())?;
                 println!("login detected");
             } else {
                 let pid = browser
@@ -145,11 +145,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let json = parse_json_flag("session", args)?;
             let browser = detect_browser().map_err(|error| error.to_string())?;
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-            let cdp_browser = browser
-                .launch_cdp(&profile_dir)
+            let session_browser = browser
+                .launch_session(&profile_dir, true)
                 .map_err(|error| error.to_string())?;
-            let mut page =
-                CdpPageSession::connect(cdp_browser.port()).map_err(|error| error.to_string())?;
+            let mut page = connect_page_session(browser.engine, session_browser.port())
+                .map_err(|error| error.to_string())?;
             let probe = probe_session(&mut page, SCINET_URL).map_err(|error| error.to_string())?;
             let logged_in = probe.is_logged_in();
 
@@ -408,7 +408,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 
 fn with_scinet_session<F>(operation: F) -> Result<ScinetResponse, String>
 where
-    F: FnOnce(&mut CdpPageSession) -> Result<ScinetResponse, PageError>,
+    F: FnOnce(&mut BrowserPageSession) -> Result<ScinetResponse, PageError>,
 {
     with_scinet_page(|page| {
         let response = operation(page).map_err(|error| error.to_string())?;
@@ -423,15 +423,15 @@ where
 
 fn with_scinet_page<F, T>(operation: F) -> Result<T, String>
 where
-    F: FnOnce(&mut CdpPageSession) -> Result<T, String>,
+    F: FnOnce(&mut BrowserPageSession) -> Result<T, String>,
 {
     let browser = detect_browser().map_err(|error| error.to_string())?;
     let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-    let cdp_browser = browser
-        .launch_cdp(&profile_dir)
+    let session_browser = browser
+        .launch_session(&profile_dir, true)
         .map_err(|error| error.to_string())?;
-    let mut page =
-        CdpPageSession::connect(cdp_browser.port()).map_err(|error| error.to_string())?;
+    let mut page = connect_page_session(browser.engine, session_browser.port())
+        .map_err(|error| error.to_string())?;
     let probe = probe_session(&mut page, SCINET_URL).map_err(|error| error.to_string())?;
 
     if !probe.is_logged_in() {
@@ -453,8 +453,11 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
     })
 }
 
-fn wait_for_login(port: u16) -> Result<(), String> {
-    let mut page = CdpPageSession::connect(port).map_err(|error| error.to_string())?;
+fn wait_for_login(engine: crate::browser::BrowserEngine, port: u16) -> Result<(), String> {
+    let mut page = connect_page_session(engine, port).map_err(|error| error.to_string())?;
+
+    page.navigate(SCINET_URL)
+        .map_err(|error| error.to_string())?;
 
     loop {
         let probe = probe_current_session(&mut page).map_err(|error| error.to_string())?;

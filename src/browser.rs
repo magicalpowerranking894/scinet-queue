@@ -7,6 +7,7 @@ use std::fs;
 #[cfg(not(windows))]
 use std::fs::File;
 use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -49,18 +50,48 @@ impl Browser {
         Ok(child.id())
     }
 
+    #[cfg(test)]
     pub(crate) fn launch_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
         self.launch_chromium_cdp(profile_dir, true)
     }
 
-    pub(crate) fn launch_login_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
-        self.launch_chromium_cdp(profile_dir, false)
+    #[cfg(test)]
+    fn launch_cdp_with_env(
+        &self,
+        profile_dir: &Path,
+        envs: &[(&str, &Path)],
+    ) -> Result<CdpBrowser, BrowserError> {
+        self.launch_chromium_cdp_with_env(profile_dir, true, envs)
+    }
+
+    pub(crate) fn launch_session(
+        &self,
+        profile_dir: &Path,
+        headless: bool,
+    ) -> Result<ManagedBrowser, BrowserError> {
+        match self.engine {
+            BrowserEngine::Chromium => self
+                .launch_chromium_cdp(profile_dir, headless)
+                .map(ManagedBrowser::Cdp),
+            BrowserEngine::Firefox => self
+                .launch_firefox_bidi(profile_dir, headless)
+                .map(ManagedBrowser::Bidi),
+        }
     }
 
     fn launch_chromium_cdp(
         &self,
         profile_dir: &Path,
         headless: bool,
+    ) -> Result<CdpBrowser, BrowserError> {
+        self.launch_chromium_cdp_with_env(profile_dir, headless, &[])
+    }
+
+    fn launch_chromium_cdp_with_env(
+        &self,
+        profile_dir: &Path,
+        headless: bool,
+        envs: &[(&str, &Path)],
     ) -> Result<CdpBrowser, BrowserError> {
         if self.engine != BrowserEngine::Chromium {
             return Err(BrowserError::UnsupportedCdpEngine(self.engine));
@@ -78,6 +109,8 @@ impl Browser {
             .arg("--remote-debugging-address=127.0.0.1")
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
+            .arg("--password-store=basic")
+            .arg("--use-mock-keychain")
             .arg(SCINET_URL)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -87,6 +120,10 @@ impl Browser {
             command.arg("--headless=new").arg("--disable-gpu");
         } else {
             command.arg("--new-window");
+        }
+
+        for (key, value) in envs {
+            command.env(key, value);
         }
 
         let mut child = command.spawn()?;
@@ -106,6 +143,64 @@ impl Browser {
             _lock: lock,
         })
     }
+
+    fn launch_firefox_bidi(
+        &self,
+        profile_dir: &Path,
+        headless: bool,
+    ) -> Result<BidiBrowser, BrowserError> {
+        if self.engine != BrowserEngine::Firefox {
+            return Err(BrowserError::UnsupportedBidiEngine(self.engine));
+        }
+
+        fs::create_dir_all(profile_dir)?;
+        let lock = ProfileLock::acquire(profile_dir)?;
+        let port = reserve_loopback_port()?;
+
+        let mut command = Command::new(&self.path);
+        command
+            .arg("--profile")
+            .arg(profile_dir)
+            .arg("--no-remote")
+            .arg("--remote-debugging-port")
+            .arg(port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if headless {
+            command.arg("--headless");
+        }
+
+        let mut child = command.spawn()?;
+
+        if let Err(error) = wait_for_tcp_port(port, &mut child, Duration::from_secs(10)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+
+        Ok(BidiBrowser {
+            child,
+            port,
+            _lock: lock,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ManagedBrowser {
+    Cdp(CdpBrowser),
+    Bidi(BidiBrowser),
+}
+
+impl ManagedBrowser {
+    pub(crate) fn port(&self) -> u16 {
+        match self {
+            ManagedBrowser::Cdp(browser) => browser.port(),
+            ManagedBrowser::Bidi(browser) => browser.port(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -122,6 +217,26 @@ impl CdpBrowser {
 }
 
 impl Drop for CdpBrowser {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct BidiBrowser {
+    child: Child,
+    port: u16,
+    _lock: ProfileLock,
+}
+
+impl BidiBrowser {
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for BidiBrowser {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -160,7 +275,9 @@ pub(crate) enum BrowserError {
     EnvBrowserNotFound(PathBuf),
     ProfileLocked(PathBuf),
     UnsupportedCdpEngine(BrowserEngine),
+    UnsupportedBidiEngine(BrowserEngine),
     BrowserExited,
+    BidiPortTimeout(u16),
     DevtoolsPortTimeout(PathBuf),
     InvalidDevtoolsPort { path: PathBuf, value: String },
 }
@@ -198,7 +315,18 @@ impl fmt::Display for BrowserError {
                     "CDP session probe is not supported for {engine} browsers yet"
                 )
             }
-            BrowserError::BrowserExited => write!(f, "browser exited before CDP became available"),
+            BrowserError::UnsupportedBidiEngine(engine) => {
+                write!(
+                    f,
+                    "BiDi session probe is not supported for {engine} browsers"
+                )
+            }
+            BrowserError::BrowserExited => {
+                write!(f, "browser exited before automation became available")
+            }
+            BrowserError::BidiPortTimeout(port) => {
+                write!(f, "timed out waiting for BiDi on 127.0.0.1:{port}")
+            }
             BrowserError::DevtoolsPortTimeout(path) => {
                 write!(f, "timed out waiting for {}", path.display())
             }
@@ -318,6 +446,29 @@ fn wait_for_devtools_port(
     }
 
     Err(BrowserError::DevtoolsPortTimeout(path.to_path_buf()))
+}
+
+fn reserve_loopback_port() -> Result<u16, BrowserError> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    Ok(listener.local_addr()?.port())
+}
+
+fn wait_for_tcp_port(port: u16, child: &mut Child, timeout: Duration) -> Result<(), BrowserError> {
+    let start = Instant::now();
+
+    while start.elapsed() < timeout {
+        if child.try_wait()?.is_some() {
+            return Err(BrowserError::BrowserExited);
+        }
+
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return Ok(());
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    Err(BrowserError::BidiPortTimeout(port))
 }
 
 fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Path) {
@@ -500,6 +651,7 @@ fn platform_browser_candidates() -> Vec<Browser> {
         firefox_app("/Applications/Firefox.app/Contents/MacOS/firefox"),
         firefox_app("/Applications/Firefox.app/Contents/MacOS/firefox-bin"),
         firefox_app("/Applications/Zen Browser.app/Contents/MacOS/zen"),
+        firefox_app("/Applications/Zen.app/Contents/MacOS/zen"),
     ]
 }
 
@@ -649,9 +801,14 @@ mod tests {
     fn cdp_launch_retries_empty_devtools_port_file() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = env::temp_dir().join(format!("snq-cdp-empty-port-test-{}", std::process::id()));
+        let dir = env::temp_dir().join(format!(
+            "snq-cdp-empty-port-test-{}-{}",
+            std::process::id(),
+            lock_token()
+        ));
         let profile = dir.join("profile");
         let script = dir.join("fake-browser.sh");
+        let args_path = dir.join("args.txt");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             &script,
@@ -661,6 +818,7 @@ for arg in "$@"; do
     --user-data-dir=*) profile="${arg#--user-data-dir=}" ;;
   esac
 done
+printf '%s\n' "$@" > "$SNQ_TEST_BROWSER_ARGS"
 mkdir -p "$profile"
 : > "$profile/DevToolsActivePort"
 sleep 0.1
@@ -677,9 +835,14 @@ sleep 60
             engine: BrowserEngine::Chromium,
             path: script,
         };
-        let cdp = browser.launch_cdp(&profile).unwrap();
+        let cdp = browser
+            .launch_cdp_with_env(&profile, &[("SNQ_TEST_BROWSER_ARGS", args_path.as_path())])
+            .unwrap();
 
         assert_eq!(cdp.port(), 9222);
+        let args = fs::read_to_string(&args_path).unwrap();
+        assert!(args.contains("--password-store=basic"));
+        assert!(args.contains("--use-mock-keychain"));
 
         let _ = fs::remove_dir_all(dir);
     }
