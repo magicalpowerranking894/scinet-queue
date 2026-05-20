@@ -8,17 +8,18 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::scinet::SCINET_URL;
+
 const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
-pub const SCINET_URL: &str = "https://sci-net.xyz/";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Browser {
-    pub engine: BrowserEngine,
-    pub path: PathBuf,
+pub(crate) struct Browser {
+    pub(crate) engine: BrowserEngine,
+    pub(crate) path: PathBuf,
 }
 
 impl Browser {
-    pub fn launch_login(&self, profile_dir: &Path) -> Result<u32, BrowserError> {
+    pub(crate) fn launch_login(&self, profile_dir: &Path) -> Result<u32, BrowserError> {
         fs::create_dir_all(profile_dir)?;
 
         #[cfg(target_os = "macos")]
@@ -42,11 +43,11 @@ impl Browser {
         Ok(child.id())
     }
 
-    pub fn launch_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
+    pub(crate) fn launch_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
         self.launch_chromium_cdp(profile_dir, true)
     }
 
-    pub fn launch_login_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
+    pub(crate) fn launch_login_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
         self.launch_chromium_cdp(profile_dir, false)
     }
 
@@ -95,14 +96,14 @@ impl Browser {
 }
 
 #[derive(Debug)]
-pub struct CdpBrowser {
+pub(crate) struct CdpBrowser {
     child: Child,
     port: u16,
     _lock: ProfileLock,
 }
 
 impl CdpBrowser {
-    pub fn port(&self) -> u16 {
+    pub(crate) fn port(&self) -> u16 {
         self.port
     }
 }
@@ -115,7 +116,7 @@ impl Drop for CdpBrowser {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum BrowserEngine {
+pub(crate) enum BrowserEngine {
     Chromium,
     Firefox,
 }
@@ -139,7 +140,7 @@ impl fmt::Display for BrowserEngine {
 }
 
 #[derive(Debug)]
-pub enum BrowserError {
+pub(crate) enum BrowserError {
     Io(std::io::Error),
     NoProjectDirs,
     NoBrowserFound,
@@ -191,7 +192,7 @@ impl From<std::io::Error> for BrowserError {
     }
 }
 
-pub fn detect_browser() -> Result<Browser, BrowserError> {
+pub(crate) fn detect_browser() -> Result<Browser, BrowserError> {
     if let Some(path) = env::var_os(BROWSER_ENV) {
         let path = PathBuf::from(path);
 
@@ -211,7 +212,7 @@ pub fn detect_browser() -> Result<Browser, BrowserError> {
         .ok_or(BrowserError::NoBrowserFound)
 }
 
-pub fn profile_dir(engine: BrowserEngine) -> Result<PathBuf, BrowserError> {
+pub(crate) fn profile_dir(engine: BrowserEngine) -> Result<PathBuf, BrowserError> {
     let dirs =
         ProjectDirs::from("com", "tivris", "scinet-queue").ok_or(BrowserError::NoProjectDirs)?;
     let state_dir = dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir());

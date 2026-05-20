@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct QueueEntry {
-    pub doi: String,
-    pub status: QueueStatus,
-    pub created_at: u64,
-    pub updated_at: u64,
+pub(crate) struct QueueEntry {
+    pub(crate) doi: String,
+    pub(crate) status: QueueStatus,
+    pub(crate) created_at: u64,
+    pub(crate) updated_at: u64,
 }
 
 impl QueueEntry {
@@ -26,7 +26,7 @@ impl QueueEntry {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum QueueStatus {
+pub(crate) enum QueueStatus {
     Queued,
     Requested,
     Working,
@@ -49,16 +49,16 @@ impl fmt::Display for QueueStatus {
 }
 
 #[derive(Debug)]
-pub struct Queue {
+pub(crate) struct Queue {
     path: PathBuf,
 }
 
 impl Queue {
-    pub fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
 
-    pub fn add(&self, raw_doi: &str) -> Result<AddResult, QueueError> {
+    pub(crate) fn add(&self, raw_doi: &str) -> Result<AddResult, QueueError> {
         let doi = normalize_doi(raw_doi)?;
         let mut entries = self.read()?;
 
@@ -72,11 +72,11 @@ impl Queue {
         Ok(AddResult::Queued(doi))
     }
 
-    pub fn list(&self) -> Result<Vec<QueueEntry>, QueueError> {
+    pub(crate) fn list(&self) -> Result<Vec<QueueEntry>, QueueError> {
         self.read()
     }
 
-    pub fn remove(&self, raw_doi: &str) -> Result<RemoveResult, QueueError> {
+    pub(crate) fn remove(&self, raw_doi: &str) -> Result<RemoveResult, QueueError> {
         let doi = normalize_doi(raw_doi)?;
         let mut entries = self.read()?;
         let before = entries.len();
@@ -91,7 +91,7 @@ impl Queue {
         Ok(RemoveResult::Removed(doi))
     }
 
-    pub fn set_status(
+    pub(crate) fn set_status(
         &self,
         raw_doi: &str,
         status: QueueStatus,
@@ -158,25 +158,25 @@ impl Queue {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum AddResult {
+pub(crate) enum AddResult {
     Queued(String),
     AlreadyQueued(String),
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum RemoveResult {
+pub(crate) enum RemoveResult {
     Removed(String),
     NotFound(String),
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum StatusResult {
+pub(crate) enum StatusResult {
     Updated(String),
     NotFound(String),
 }
 
 #[derive(Debug)]
-pub enum QueueError {
+pub(crate) enum QueueError {
     Io(io::Error),
     Json(serde_json::Error),
     CorruptLine {
@@ -218,11 +218,11 @@ impl From<serde_json::Error> for QueueError {
     }
 }
 
-pub fn default_queue_path() -> PathBuf {
+pub(crate) fn default_queue_path() -> PathBuf {
     PathBuf::from(".snq").join("queue.jsonl")
 }
 
-pub fn normalize_doi(raw: &str) -> Result<String, QueueError> {
+pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
     let doi = raw
         .trim()
         .trim_start_matches("doi:")
