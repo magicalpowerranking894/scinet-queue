@@ -39,6 +39,19 @@ plain text or Markdown file. Use `snq import -` to read from stdin.
 
 `snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
 
+## Workflow
+
+```sh
+snq login
+snq import research-papers.md
+snq request --all --reward 1
+snq watch
+snq fetch --out papers
+snq approve 10.1287/mnsc.2024.05040
+```
+
+Approval is always explicit.
+
 ## Design
 
 - Native CLI.
@@ -90,8 +103,8 @@ Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 
 ## Storage
 
-Queue state is workspace-local by default. Account and browser profile state can
-live under the user's platform data directory once `snq login` exists.
+Queue state is workspace-local by default. Account and browser profile state
+lives under the user's platform state directory.
 
 The queue is plain and inspectable:
 
