@@ -3,103 +3,39 @@
 [![ci](https://github.com/tivris/scinet-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/tivris/scinet-queue/actions/workflows/ci.yml)
 
 `scinet-queue` is a small command-line tool for managing Sci-Net paper
-requests.
+requests. The binary is `snq`.
 
-The binary is `snq`.
-
-## Status
-
-Early development. The local queue, browser session probe, Sci-Net search,
-request, watch, fetch, local approve, JSON output, and doctor commands are
-supported.
+The project is in early development. The local queue, browser session probe,
+Sci-Net search, request, watch, fetch, local approve, JSON output, and doctor
+commands are supported. macOS, Linux, and Windows builds are checked in CI.
 
 Authenticated commands use a managed browser profile. Chromium-compatible
-browsers are supported through Chrome DevTools Protocol, and Firefox/Gecko-based
-browsers are supported through WebDriver BiDi. macOS, Linux, and Windows builds
-are checked in CI.
+browsers are supported through Chrome DevTools Protocol. Firefox/Gecko-based
+browsers are supported through WebDriver BiDi.
 
-| Area | Status |
-| --- | --- |
-| macOS | CI checked |
-| Linux | CI checked |
-| Windows | CI checked |
-| Chromium-compatible browsers | Supported for authenticated commands through Chrome DevTools Protocol |
-| Firefox/Gecko-based browsers | Supported for authenticated commands through WebDriver BiDi |
-| Existing browser cookie import | Not supported |
-| Automatic token approval | Not supported |
+`snq` does not bundle a browser, import cookies from an existing browser
+profile, or approve tokens automatically.
 
 ## Install
 
 Requires Rust 1.85 or newer.
 
-From GitHub:
+Install the released tag from GitHub:
 
 ```sh
 cargo install --locked --git https://github.com/tivris/scinet-queue --tag v0.1.0
 ```
 
-From a local checkout:
+Install from a local checkout:
 
 ```sh
 cargo install --locked --path .
 ```
 
-## Usage
+## Quick Start
 
-```sh
-snq login
-snq session
-snq add 10.1000/snq-example
-snq import papers.md
-snq list
-snq list --json
-snq remove 10.1000/snq-example
-snq check 10.1000/snq-example
-snq request 10.1000/snq-example --reward 1
-snq request --all --reward 1
-snq request --all --reward 1 --json
-snq watch
-snq watch --json
-snq view 10.1000/snq-example
-snq view 10.1000/snq-example --json
-snq fetch 10.1000/snq-example --out papers
-snq fetch --out papers
-snq fetch --wait --poll 30 --out papers
-snq approve 10.1000/snq-example
-snq approve 10.1000/snq-example --force
-snq doctor
-snq doctor --json
-```
-
-Agent-facing JSON:
-
-```sh
-$ snq list --json
-[
-  {
-    "doi": "10.1000/snq-example",
-    "status": "working",
-    "created_at": 1779283748,
-    "updated_at": 1779285046
-  }
-]
-
-$ snq watch --json
-[
-  {
-    "doi": "10.1000/snq-example",
-    "status": "working",
-    "remote_state": "pdf"
-  }
-]
-```
-
-`snq add` accepts one or more DOIs. `snq import <path>` extracts DOIs from a
-plain text or Markdown file. Use `snq import -` to read from stdin.
-
-`snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
-
-## Workflow
+Log in once, import DOIs, request them, wait for PDFs, fetch them, then mark
+reviewed papers as approved in the local queue:
 
 ```sh
 snq login
@@ -110,7 +46,189 @@ snq fetch --wait --poll 30 --out papers
 snq approve 10.1000/snq-example
 ```
 
-Approval is always explicit.
+Approval is always explicit. `snq approve` records local review state only; it
+does not automatically release tokens or submit approval actions on Sci-Net.
+
+## Queue Basics
+
+Add one or more DOIs directly:
+
+```sh
+snq add 10.1000/snq-example
+```
+
+Import DOIs from a plain text or Markdown file:
+
+```sh
+snq import papers.md
+```
+
+Use `snq import -` to read from stdin.
+
+List or remove queued entries:
+
+```sh
+snq list
+snq remove 10.1000/snq-example
+```
+
+`snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
+
+## Sci-Net Commands
+
+Check whether Sci-Net can find a DOI:
+
+```sh
+snq check 10.1000/snq-example
+```
+
+Request one queued paper, or request all queued papers:
+
+```sh
+snq request 10.1000/snq-example --reward 1
+snq request --all --reward 1
+```
+
+If `--reward` is omitted, `snq` uses `1`.
+
+Watch queued requests for visible PDF uploads:
+
+```sh
+snq watch
+```
+
+Inspect one remote request:
+
+```sh
+snq view 10.1000/snq-example
+```
+
+Download one available PDF, or fetch available PDFs for queued, requested, and
+working entries:
+
+```sh
+snq fetch 10.1000/snq-example --out papers
+snq fetch --out papers
+```
+
+Keep polling until a PDF appears:
+
+```sh
+snq fetch --wait --poll 30 --out papers
+```
+
+Mark a fetched paper as reviewed in the local queue:
+
+```sh
+snq approve 10.1000/snq-example
+```
+
+By default, the queue entry must already be fetched. Use `--force` only when
+the PDF was reviewed outside `snq`.
+
+## JSON Output
+
+Agent-facing JSON is available for commands that need structured output:
+
+```sh
+snq list --json
+snq request --all --reward 1 --json
+snq watch --json
+snq view 10.1000/snq-example --json
+snq fetch --json
+snq approve 10.1000/snq-example --json
+snq doctor --json
+```
+
+Example `snq list --json` output:
+
+```json
+[
+  {
+    "doi": "10.1000/snq-example",
+    "status": "working",
+    "created_at": 1779283748,
+    "updated_at": 1779285046
+  }
+]
+```
+
+Example `snq watch --json` output:
+
+```json
+[
+  {
+    "doi": "10.1000/snq-example",
+    "status": "working",
+    "remote_state": "pdf"
+  }
+]
+```
+
+## Browser Sessions
+
+Authenticated Sci-Net commands run through a `snq`-managed browser profile.
+The profile is separate from the user's normal browser profile.
+
+The browser support model is engine/protocol oriented:
+
+| Engine family | Protocol | Status |
+| --- | --- | --- |
+| Chromium-compatible | Chrome DevTools Protocol | Supported |
+| Firefox/Gecko-based | WebDriver BiDi | Supported |
+
+`snq` discovers a compatible browser on the system. To choose a specific
+browser binary, set:
+
+```sh
+SCINET_QUEUE_BROWSER=/path/to/browser
+```
+
+`snq login` opens the managed profile and waits until Sci-Net is logged in:
+
+```sh
+snq login
+```
+
+After login, authenticated commands reuse that managed profile headlessly. Use
+`snq login --no-wait` to leave the login browser open.
+
+`snq session` starts the managed profile headlessly and checks whether Sci-Net
+loads with a logged-in session:
+
+```sh
+snq session
+snq session --json
+```
+
+`snq doctor` checks browser discovery, profile path resolution, queue
+readability, and Sci-Net session state:
+
+```sh
+snq doctor
+snq doctor --json
+```
+
+`snq doctor` exits nonzero if any check fails. Redact local usernames, profile
+paths, and paper paths before posting doctor output publicly.
+
+The login flow avoids decrypting cookies from existing browser profiles or the
+operating system keychain. Importing an existing browser profile is outside the
+default flow.
+
+## Storage
+
+Queue state is workspace-local by default. Account and browser profile state
+lives under the user's platform state directory.
+
+The queue is plain and inspectable:
+
+```text
+.snq/
+  queue.jsonl
+  queue.lock
+papers/
+```
 
 ## Design
 
@@ -122,60 +240,6 @@ Approval is always explicit.
 - No bundled browser.
 - No background daemon by default.
 - No token approval without an explicit user command.
-
-## Browser Session
-
-`snq login` opens a tool-owned browser profile, waits until Sci-Net is logged
-in, then closes the browser:
-
-```sh
-snq login
-```
-
-The user logs into Sci-Net once. Later commands reuse that profile headlessly
-without taking over the user's normal browser. Use `snq login --no-wait` to
-leave the login browser open.
-
-`snq session` starts the managed profile headlessly and checks whether Sci-Net
-loads with a logged-in session. Pass `--json` for structured output.
-
-`snq doctor` checks browser discovery, profile path resolution, queue
-readability, and Sci-Net session state. Pass `--json` for structured output.
-It exits nonzero if any check fails. Redact local usernames, profile paths, and
-paper paths before posting doctor output publicly.
-
-`snq check <doi>` calls Sci-Net's search endpoint from that browser session and
-prints the JSON response.
-
-`snq request <doi> --reward <n>` posts a Sci-Net request from the same session.
-`snq request --all --reward <n>` requests queued entries.
-If `--reward` is omitted, `snq` uses `1`.
-Pass `--json` for structured request results.
-
-`snq watch` checks queued requests for visible PDF uploads.
-Pass `--json` for structured queue and remote state.
-
-`snq view <doi>` prints the remote request state, detected PDF links, and a
-short text excerpt for one request. Pass `--json` for the full captured text
-and PDF links.
-
-`snq fetch <doi> --out <dir>` downloads one available PDF into the output
-directory and marks the queue entry as fetched. Without a DOI, `snq fetch`
-checks queued, requested, and working entries. Use `--wait --poll <seconds>` to
-keep checking until a PDF appears.
-
-`snq approve <doi>` marks a fetched paper as reviewed in the local queue. By
-default, the queue entry must already be fetched. Use `--force` only when the
-PDF was reviewed outside `snq`.
-
-This avoids decrypting cookies from existing browser profiles or the operating
-system keychain. Importing an existing browser profile is outside the default
-flow.
-
-Browser automation is engine/protocol oriented: Chromium-compatible browsers use
-Chrome DevTools Protocol, and Firefox/Gecko-based browsers use WebDriver BiDi.
-
-Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 
 ## Known Limitations
 
@@ -196,20 +260,6 @@ with Sci-Net, any third-party paper index, repository, or publisher. It does
 not bypass authentication, paywalls, access controls, or usage terms. Use it
 only where you have the right to request, download, and store the papers
 involved.
-
-## Storage
-
-Queue state is workspace-local by default. Account and browser profile state
-lives under the user's platform state directory.
-
-The queue is plain and inspectable:
-
-```text
-.snq/
-  queue.jsonl
-  queue.lock
-papers/
-```
 
 ## Contributing
 
