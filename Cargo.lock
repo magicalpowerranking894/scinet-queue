@@ -481,6 +481,7 @@ dependencies = [
 name = "scinet-queue"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "directories",
  "serde",
  "serde_json",

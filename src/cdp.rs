@@ -1,3 +1,5 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fmt;
@@ -19,6 +21,30 @@ pub struct ScinetResponse {
     pub ok: bool,
     pub status: u16,
     pub body: Value,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RequestView {
+    pub title: String,
+    pub url: String,
+    pub text: String,
+    pub pdf_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PdfDownload {
+    pub bytes: Vec<u8>,
+    pub content_type: Option<String>,
+}
+
+impl RequestView {
+    pub fn looks_logged_out(&self) -> bool {
+        looks_like_login_text(&self.text)
+    }
+
+    pub fn has_pdf(&self) -> bool {
+        !self.pdf_urls.is_empty()
+    }
 }
 
 impl SessionProbe {
@@ -51,18 +77,19 @@ impl ScinetResponse {
         self.body
             .get("text")
             .and_then(Value::as_str)
-            .map(|text| {
-                let text = text.to_ascii_lowercase();
-                text.contains("username")
-                    && text.contains("password")
-                    && text.contains("no account yet")
-            })
+            .map(looks_like_login_text)
             .unwrap_or(false)
     }
 }
 
+fn looks_like_login_text(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("username") && text.contains("password") && text.contains("no account yet")
+}
+
 #[derive(Debug)]
 pub enum CdpError {
+    Base64(base64::DecodeError),
     Http(ureq::Error),
     Json(serde_json::Error),
     WebSocket(tungstenite::Error),
@@ -74,11 +101,18 @@ impl fmt::Display for CdpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CdpError::Http(error) => write!(f, "{error}"),
+            CdpError::Base64(error) => write!(f, "{error}"),
             CdpError::Json(error) => write!(f, "{error}"),
             CdpError::WebSocket(error) => write!(f, "{error}"),
             CdpError::NoPageTarget => write!(f, "could not find a CDP page target"),
             CdpError::UnexpectedResponse(value) => write!(f, "unexpected CDP response: {value}"),
         }
+    }
+}
+
+impl From<base64::DecodeError> for CdpError {
+    fn from(error: base64::DecodeError) -> Self {
+        CdpError::Base64(error)
     }
 }
 
@@ -129,6 +163,73 @@ pub fn request_doi(
         "/request",
         json!({ "doi": doi, "reward": reward }),
     )
+}
+
+pub fn view_request(port: u16, url: &str, doi: &str) -> Result<RequestView, CdpError> {
+    let target = page_target(port)?;
+    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+    let doi_path = doi.replace('/', "%2F");
+    let view_url = format!("{}/view/{}", url.trim_end_matches('/'), doi_path);
+
+    cdp.navigate(&view_url)?;
+
+    let value = cdp.evaluate_json(
+        r#"(() => {
+            const values = [];
+            for (const element of document.querySelectorAll('a[href], iframe[src], embed[src], object[data]')) {
+                const value = element.href || element.src || element.data;
+                if (value && (value.includes('/storage/') || value.toLowerCase().includes('.pdf'))) {
+                    values.push(value);
+                }
+            }
+            return {
+                title: document.title,
+                url: location.href,
+                text: (document.body && document.body.innerText || '').slice(0, 4000),
+                pdf_urls: Array.from(new Set(values))
+            };
+        })()"#,
+    )?;
+
+    serde_json::from_value(value).map_err(CdpError::Json)
+}
+
+pub fn download_pdf(port: u16, pdf_url: &str) -> Result<PdfDownload, CdpError> {
+    let target = page_target(port)?;
+    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+    let pdf_url = serde_json::to_string(pdf_url)?;
+
+    let value = cdp.evaluate_json(&format!(
+        r#"(async () => {{
+            const response = await fetch({pdf_url}, {{ credentials: 'include' }});
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            let binary = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {{
+                binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+            }}
+            return {{
+                ok: response.ok,
+                status: response.status,
+                content_type: response.headers.get('content-type'),
+                body: btoa(binary)
+            }};
+        }})()"#
+    ))?;
+
+    let response: DownloadResponse = serde_json::from_value(value)?;
+
+    if !response.ok {
+        return Err(CdpError::UnexpectedResponse(json!({
+            "status": response.status,
+            "content_type": response.content_type
+        })));
+    }
+
+    Ok(PdfDownload {
+        bytes: BASE64.decode(response.body)?,
+        content_type: response.content_type,
+    })
 }
 
 fn scinet_post(
@@ -265,6 +366,14 @@ struct Target {
     web_socket_debugger_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct DownloadResponse {
+    ok: bool,
+    status: u16,
+    content_type: Option<String>,
+    body: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +411,18 @@ mod tests {
         };
 
         assert!(response.looks_logged_out());
+    }
+
+    #[test]
+    fn request_view_reports_pdf_presence() {
+        let view = RequestView {
+            title: "Sci-Net".to_string(),
+            url: "https://sci-net.xyz/view/10.x".to_string(),
+            text: "uploaded".to_string(),
+            pdf_urls: vec!["https://sci-net.xyz/storage/paper.pdf".to_string()],
+        };
+
+        assert!(view.has_pdf());
+        assert!(!view.looks_logged_out());
     }
 }
