@@ -132,13 +132,10 @@ impl Browser {
 
         let mut command = Command::new(&self.path);
         command
-            .arg(format!("--user-data-dir={}", profile_dir.display()))
             .arg("--remote-debugging-port=0")
-            .arg("--remote-debugging-address=127.0.0.1")
-            .arg("--no-first-run")
-            .arg("--no-default-browser-check")
-            .arg("--password-store=basic")
-            .arg("--use-mock-keychain")
+            .arg("--remote-debugging-address=127.0.0.1");
+        add_chromium_profile_args(&mut command, profile_dir);
+        command
             .arg(SCINET_URL)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -684,17 +681,26 @@ fn wait_for_tcp_port(port: u16, child: &mut Child, timeout: Duration) -> Result<
 fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Path) {
     match engine {
         BrowserEngine::Chromium => {
-            command
-                .arg(format!("--user-data-dir={}", profile_dir.display()))
-                .arg("--no-first-run")
-                .arg("--no-default-browser-check")
-                .arg("--new-window")
-                .arg(SCINET_URL);
+            add_chromium_profile_args(command, profile_dir);
+            command.arg("--new-window").arg(SCINET_URL);
         }
         BrowserEngine::Firefox => {
-            command.arg("--profile").arg(profile_dir).arg(SCINET_URL);
+            command
+                .arg("--profile")
+                .arg(profile_dir)
+                .arg("--no-remote")
+                .arg(SCINET_URL);
         }
     }
+}
+
+fn add_chromium_profile_args(command: &mut Command, profile_dir: &Path) {
+    command
+        .arg(format!("--user-data-dir={}", profile_dir.display()))
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--password-store=basic")
+        .arg("--use-mock-keychain");
 }
 
 #[derive(Debug)]
@@ -967,6 +973,43 @@ mod tests {
         );
         assert_eq!(parse_devtools_port("9333\n"), None);
         assert_eq!(parse_devtools_port("nope\n/devtools/browser/abc\n"), None);
+    }
+
+    #[test]
+    fn chromium_login_uses_managed_profile_without_keychain_prompts() {
+        let profile = Path::new("/tmp/snq-profile");
+        let mut command = Command::new("browser");
+
+        add_login_args(&mut command, BrowserEngine::Chromium, profile);
+
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&format!("--user-data-dir={}", profile.display())));
+        assert!(args.contains(&"--password-store=basic".to_string()));
+        assert!(args.contains(&"--use-mock-keychain".to_string()));
+        assert!(args.contains(&"--new-window".to_string()));
+        assert!(args.contains(&SCINET_URL.to_string()));
+    }
+
+    #[test]
+    fn firefox_login_uses_managed_profile_without_remote_handoff() {
+        let profile = Path::new("/tmp/snq-profile");
+        let mut command = Command::new("browser");
+
+        add_login_args(&mut command, BrowserEngine::Firefox, profile);
+
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"--profile".to_string()));
+        assert!(args.contains(&profile.display().to_string()));
+        assert!(args.contains(&"--no-remote".to_string()));
+        assert!(args.contains(&SCINET_URL.to_string()));
     }
 
     #[test]

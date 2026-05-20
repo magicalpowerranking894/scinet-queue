@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Aligned managed login launch flags across browser engines to avoid Chromium
+  keychain prompts and Firefox remote handoff.
 - Added a GitHub Actions release workflow for precompiled `snq` archives and
   `SHA256SUMS`.
 - Documented release binary installation and the release process.
@@ -9,7 +11,7 @@
 ## 0.1.0 - 2026-05-20
 
 - Added a workspace-local DOI queue.
-- Added managed Chromium login and headless Sci-Net session reuse.
+- Added managed browser login and headless Sci-Net session reuse.
 - Added Sci-Net `check`, `request`, `watch`, `view`, `fetch`, and local
   `approve` commands.
 - Added batch DOI import and queued request/fetch workflows.

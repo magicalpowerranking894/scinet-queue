@@ -235,8 +235,9 @@ For scripts or agents, set the path explicitly:
 snq browsers --set /path/to/browser
 ```
 
-The preference is stored in `.snq/browser.json`. It is local to the current
-workspace, checked every time it is used, and can be removed with:
+The workspace browser preference is stored in `.snq/browser.json`. It is local
+to the current workspace, checked every time it is used, and can be removed
+with:
 
 ```sh
 snq browsers --clear
@@ -249,8 +250,8 @@ Selection order is:
 3. The first discovered compatible browser.
 
 If more than one compatible browser is available and no preference exists,
-interactive authenticated commands ask once and save the answer. JSON and
-noninteractive paths do not prompt.
+interactive login and authenticated commands ask once and save the answer. JSON
+and noninteractive paths do not prompt.
 
 To inspect discovery and the active selection, run:
 
@@ -258,6 +259,9 @@ To inspect discovery and the active selection, run:
 snq browsers
 snq browsers --json
 ```
+
+If `.snq/browser.json` is edited by hand and becomes invalid, authenticated
+commands fail until the preference is cleared or replaced.
 
 To override everything without writing `.snq/browser.json`, set:
 
@@ -272,7 +276,8 @@ snq login
 ```
 
 After login, authenticated commands reuse that managed profile headlessly. Use
-`snq login --no-wait` to leave the login browser open.
+`snq login --no-wait` to leave the login browser open; finish login and close
+that browser before running headless authenticated commands.
 
 `snq session` starts the managed profile headlessly and checks whether Sci-Net
 loads with a logged-in session:

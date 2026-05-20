@@ -30,7 +30,7 @@ snq {version}
 A tiny agent-friendly DOI queue for Sci-Net.
 
 Usage:
-  snq login
+  snq login [--no-wait]
   snq session [--json]
   snq browsers [--pick|--set <path>|--clear] [--json]
   snq add <doi>...
@@ -47,9 +47,11 @@ Usage:
 
 Options:
       --json        Print machine-readable JSON where supported
-      --no-wait     Open login browser without waiting for authentication
   -h, --help       Print help
   -V, --version    Print version
+
+Command-specific options:
+      --no-wait     Open login browser without waiting for authentication
 "
     );
 }
