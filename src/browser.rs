@@ -108,7 +108,7 @@ pub fn detect_browser() -> Result<Browser, BrowserError> {
 
     browser_candidates()
         .into_iter()
-        .find_map(|browser| resolve_browser(browser))
+        .find_map(resolve_browser)
         .ok_or(BrowserError::NoBrowserFound)
 }
 
