@@ -128,6 +128,10 @@ snq fetch 10.1000/snq-example --out papers
 snq fetch --out papers
 ```
 
+`snq fetch` downloads PDFs that are visible on Sci-Net request pages. It does
+not search publisher pages or open-access repositories itself, so a DOI can be
+open elsewhere and still report `no-pdf` or `pending` in `snq`.
+
 Keep polling until every targeted DOI has a PDF:
 
 ```sh
@@ -277,7 +281,9 @@ snq login
 
 After login, authenticated commands reuse that managed profile headlessly. Use
 `snq login --no-wait` to leave the login browser open; finish login and close
-that browser before running headless authenticated commands.
+that browser before running `snq session`, `snq fetch`, or other authenticated
+commands. The printed PID is the launcher process; on macOS the long-lived app
+process may have a different PID.
 
 `snq session` starts the managed profile headlessly and checks whether Sci-Net
 loads with a logged-in session:

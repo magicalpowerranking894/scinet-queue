@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarified `login --no-wait` terminal guidance and Sci-Net-visible PDF fetch
+  behavior.
 - Fixed text output for mixed batch fetches so pending DOIs stay visible when
   another DOI downloads successfully.
 - Made malformed `.snq/browser.json` preferences visible in `snq browsers` and

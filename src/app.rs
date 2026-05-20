@@ -148,8 +148,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                     .launch_login(&profile_dir)
                     .map_err(|error| error.to_string())?;
 
-                println!("opened {} browser pid {}", browser.engine, pid);
-                println!("profile {}", profile_dir.display());
+                for line in login_no_wait_messages(browser.engine, &profile_dir, pid) {
+                    println!("{line}");
+                }
             }
         }
         Some("session") => {
@@ -572,6 +573,19 @@ fn can_prompt() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
+fn login_no_wait_messages(
+    engine: crate::browser::BrowserEngine,
+    profile_dir: &std::path::Path,
+    launcher_pid: u32,
+) -> [String; 4] {
+    [
+        format!("opened {engine} login window (launcher pid {launcher_pid})"),
+        format!("profile {}", profile_dir.display()),
+        "log in, then close this browser window before running authenticated commands".to_string(),
+        "run `snq session` to verify the saved login".to_string(),
+    ]
+}
+
 fn prompt_browser_choice() -> Result<Browser, String> {
     if env::var_os(BROWSER_ENV).is_some() {
         return Err(format!(
@@ -943,6 +957,19 @@ mod tests {
                 "10.1000/working".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn login_no_wait_message_explains_browser_lifetime() {
+        let profile_dir = std::path::Path::new("/tmp/snq-profile");
+        let lines =
+            login_no_wait_messages(crate::browser::BrowserEngine::Chromium, profile_dir, 1234);
+
+        assert_eq!(lines[0], "opened chromium login window (launcher pid 1234)");
+        assert_eq!(lines[1], "profile /tmp/snq-profile");
+        assert!(lines[2].contains("close this browser window"));
+        assert!(lines[2].contains("authenticated commands"));
+        assert_eq!(lines[3], "run `snq session` to verify the saved login");
     }
 
     #[test]
