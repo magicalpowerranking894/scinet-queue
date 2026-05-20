@@ -76,12 +76,18 @@ fn current_process_name() -> String {
         .ok()
         .as_deref()
         .and_then(path_file_name)
-        .unwrap_or("snq")
-        .to_ascii_lowercase()
+        .map(normalize_process_name)
+        .unwrap_or_else(|| "snq".to_string())
 }
 
 fn path_file_name(path: &Path) -> Option<&str> {
     path.file_name().and_then(|name| name.to_str())
+}
+
+fn normalize_process_name(name: &str) -> String {
+    name.strip_suffix(".exe")
+        .unwrap_or(name)
+        .to_ascii_lowercase()
 }
 
 #[cfg(unix)]
@@ -106,7 +112,7 @@ fn process_name(pid: u32) -> Option<String> {
         .ok()
         .as_deref()
         .and_then(path_file_name)
-        .map(|name| name.to_ascii_lowercase())
+        .map(normalize_process_name)
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
@@ -121,7 +127,7 @@ fn process_name(pid: u32) -> Option<String> {
     }
 
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    path_file_name(Path::new(&path)).map(|name| name.to_ascii_lowercase())
+    path_file_name(Path::new(&path)).map(normalize_process_name)
 }
 
 #[cfg(windows)]
@@ -154,12 +160,8 @@ fn process_name(pid: u32) -> Option<String> {
     let output = String::from_utf8_lossy(&output.stdout);
     let first = output.lines().next()?.split(',').next()?.trim_matches('"');
 
-    (!first.is_empty() && !first.eq_ignore_ascii_case("INFO")).then(|| {
-        first
-            .strip_suffix(".exe")
-            .unwrap_or(first)
-            .to_ascii_lowercase()
-    })
+    (!first.is_empty() && !first.eq_ignore_ascii_case("INFO"))
+        .then(|| normalize_process_name(first))
 }
 
 #[cfg(not(any(unix, windows)))]
