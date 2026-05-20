@@ -219,17 +219,24 @@ fn run() -> Result<(), String> {
             }
 
             let outputs = with_scinet_port(|port| {
-                let mut outputs = Vec::new();
+                loop {
+                    let mut outputs = Vec::new();
 
-                for doi in dois {
-                    match fetch_one(&queue, port, &doi, &fetch.out_dir) {
-                        Ok(Some(path)) => outputs.push(path),
-                        Ok(None) => {}
-                        Err(error) => return Err(error),
+                    for doi in &dois {
+                        match fetch_one(&queue, port, doi, &fetch.out_dir) {
+                            Ok(Some(path)) => outputs.push(path),
+                            Ok(None) => {}
+                            Err(error) => return Err(error),
+                        }
                     }
-                }
 
-                Ok(outputs)
+                    if !outputs.is_empty() || !fetch.wait {
+                        return Ok(outputs);
+                    }
+
+                    println!("no PDFs available; waiting {}s", fetch.poll_secs);
+                    thread::sleep(Duration::from_secs(fetch.poll_secs));
+                }
             })?;
 
             if outputs.is_empty() {
@@ -488,15 +495,33 @@ fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
 struct FetchArgs {
     doi: Option<String>,
     out_dir: PathBuf,
+    wait: bool,
+    poll_secs: u64,
 }
 
 fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArgs, String> {
     let mut doi = None;
     let mut out_dir = std::path::PathBuf::from("papers");
+    let mut wait = false;
+    let mut poll_secs = 30;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--wait" => wait = true,
+            "--poll" => {
+                let Some(value) = args.next() else {
+                    return Err("fetch: missing value for --poll".to_string());
+                };
+
+                poll_secs = value
+                    .parse()
+                    .map_err(|_| format!("fetch: invalid poll interval `{value}`"))?;
+
+                if poll_secs == 0 {
+                    return Err("fetch: poll interval must be greater than zero".to_string());
+                }
+            }
             "--out" | "-o" => {
                 let Some(value) = args.next() else {
                     return Err("fetch: missing value for --out".to_string());
@@ -517,7 +542,12 @@ fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArgs, String> 
         }
     }
 
-    Ok(FetchArgs { doi, out_dir })
+    Ok(FetchArgs {
+        doi,
+        out_dir,
+        wait,
+        poll_secs,
+    })
 }
 
 fn fetch_dois(queue: &Queue, doi: Option<&str>) -> Result<Vec<String>, String> {
@@ -625,7 +655,7 @@ Usage:
   snq check <doi>
   snq request <doi|--all> --reward <n>
   snq watch
-  snq fetch [<doi>] [--out <dir>]
+  snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>]
   snq approve <doi>
 
 Options:
@@ -769,10 +799,11 @@ mod tests {
 
     #[test]
     fn out_dir_defaults_to_papers() {
-        assert_eq!(
-            parse_fetch(std::iter::empty()).unwrap().out_dir,
-            std::path::PathBuf::from("papers")
-        );
+        let args = parse_fetch(std::iter::empty()).unwrap();
+
+        assert_eq!(args.out_dir, std::path::PathBuf::from("papers"));
+        assert!(!args.wait);
+        assert_eq!(args.poll_secs, 30);
     }
 
     #[test]
@@ -795,6 +826,21 @@ mod tests {
     fn out_dir_rejects_missing_and_unknown_values() {
         assert!(parse_fetch(["--out"].into_iter().map(str::to_string)).is_err());
         assert!(parse_fetch(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn fetch_accepts_wait_and_poll_interval() {
+        let args = parse_fetch(["--wait", "--poll", "5"].into_iter().map(str::to_string)).unwrap();
+
+        assert!(args.wait);
+        assert_eq!(args.poll_secs, 5);
+    }
+
+    #[test]
+    fn fetch_rejects_invalid_poll_interval() {
+        assert!(parse_fetch(["--poll"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_fetch(["--poll", "0"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_fetch(["--poll", "soon"].into_iter().map(str::to_string)).is_err());
     }
 
     #[test]

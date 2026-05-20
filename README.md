@@ -31,6 +31,7 @@ snq request --all --reward 1
 snq watch
 snq fetch 10.1287/mnsc.2024.05040 --out papers
 snq fetch --out papers
+snq fetch --wait --poll 30 --out papers
 snq approve 10.1287/mnsc.2024.05040
 ```
 
@@ -46,7 +47,7 @@ snq login
 snq import research-papers.md
 snq request --all --reward 1
 snq watch
-snq fetch --out papers
+snq fetch --wait --poll 30 --out papers
 snq approve 10.1287/mnsc.2024.05040
 ```
 
@@ -89,7 +90,8 @@ prints the JSON response.
 
 `snq fetch <doi> --out <dir>` downloads one available PDF into the output
 directory and marks the queue entry as fetched. Without a DOI, `snq fetch`
-checks queued, requested, and working entries.
+checks queued, requested, and working entries. Use `--wait --poll <seconds>` to
+keep checking until a PDF appears.
 
 `snq approve <doi>` accepts a submitted solution and marks the queue entry as
 approved.
