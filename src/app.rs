@@ -54,6 +54,10 @@ pub fn run() -> Result<(), String> {
                 return Err("import: missing path".to_string());
             };
 
+            if let Some(extra) = args.next() {
+                return Err(format!("import: unexpected argument `{extra}`"));
+            }
+
             let text = read_import_text(&path)?;
             let dois = extract_dois(&text);
 
@@ -90,6 +94,10 @@ pub fn run() -> Result<(), String> {
             let Some(doi) = args.next() else {
                 return Err("remove: missing DOI".to_string());
             };
+
+            if let Some(extra) = args.next() {
+                return Err(format!("remove: unexpected argument `{extra}`"));
+            }
 
             match queue.remove(&doi).map_err(|error| error.to_string())? {
                 RemoveResult::Removed(doi) => println!("removed {doi}"),
@@ -167,6 +175,10 @@ pub fn run() -> Result<(), String> {
                 return Err("check: missing DOI".to_string());
             };
 
+            if let Some(extra) = args.next() {
+                return Err(format!("check: unexpected argument `{extra}`"));
+            }
+
             let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
             let response = with_scinet_session(|port| search_doi(port, SCINET_URL, &doi))?;
             let json = format_response(&response)?;
@@ -192,6 +204,8 @@ pub fn run() -> Result<(), String> {
                     if response.looks_logged_out() {
                         return Err("not logged into Sci-Net; run `snq login` first".to_string());
                     }
+
+                    ensure_request_ok(doi, &response)?;
 
                     mark_requested(&queue, doi)?;
                     responses.push(response);
@@ -332,14 +346,7 @@ pub fn run() -> Result<(), String> {
             let approve = parse_approve(args)?;
             let doi = approve.doi;
             ensure_can_approve(&queue, &doi, approve.force)?;
-
-            match queue
-                .set_status(&doi, QueueStatus::Approved)
-                .map_err(|error| error.to_string())?
-            {
-                StatusResult::Updated(_) => {}
-                StatusResult::NotFound(_) => {}
-            }
+            mark_approved(&queue, &doi)?;
 
             println!("approved\t{doi}");
         }
@@ -470,6 +477,34 @@ fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_request_ok(doi: &str, response: &ScinetResponse) -> Result<(), String> {
+    if response.ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "request: Sci-Net returned status {} for {doi}",
+            response.status
+        ))
+    }
+}
+
+fn mark_approved(queue: &Queue, doi: &str) -> Result<(), String> {
+    match queue
+        .set_status(doi, QueueStatus::Approved)
+        .map_err(|error| error.to_string())?
+    {
+        StatusResult::Updated(_) => {}
+        StatusResult::NotFound(_) => {
+            let _ = queue.add(doi).map_err(|error| error.to_string())?;
+            let _ = queue
+                .set_status(doi, QueueStatus::Approved)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
 fn ensure_can_approve(queue: &Queue, doi: &str, force: bool) -> Result<(), String> {
     if force {
         return Ok(());
@@ -563,5 +598,35 @@ mod tests {
         assert!(ensure_can_approve(&queue, "10.1093/rfs/hhaa075", true).is_ok());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn forced_approve_creates_local_state_when_missing() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-force-approve-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let doi = "10.1093/rfs/hhaa075";
+
+        ensure_can_approve(&queue, doi, true).unwrap();
+        mark_approved(&queue, doi).unwrap();
+
+        let entries = queue.list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].doi, doi);
+        assert_eq!(entries[0].status, QueueStatus::Approved);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn request_non_ok_response_is_rejected() {
+        let response = ScinetResponse {
+            ok: false,
+            status: 500,
+            body: serde_json::json!({ "error": "boom" }),
+        };
+
+        assert!(ensure_request_ok("10.1093/rfs/hhaa075", &response).is_err());
     }
 }

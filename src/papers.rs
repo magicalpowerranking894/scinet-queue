@@ -25,7 +25,7 @@ pub(crate) fn extract_dois(text: &str) -> Vec<String> {
     for (start, _) in text.match_indices("10.") {
         let tail = &text[start..];
         let raw = tail
-            .split(|ch: char| ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\''))
+            .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\''))
             .next()
             .unwrap_or_default()
             .trim_end_matches(['.', ',', ';', ':', ')', ']', '}']);
@@ -140,14 +140,26 @@ mod tests {
 - https://doi.org/10.1287/MNSC.2024.05040
 - doi:10.1093/rfs/hhaa075.
 - duplicate 10.1287/mnsc.2024.05040
+- query string https://doi.org/10.1000/ABC?utm_source=x
 "#;
 
         assert_eq!(
             extract_dois(text),
             vec![
                 "10.1287/mnsc.2024.05040".to_string(),
-                "10.1093/rfs/hhaa075".to_string()
+                "10.1093/rfs/hhaa075".to_string(),
+                "10.1000/abc".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn extracts_old_style_dois_with_angle_brackets() {
+        let text = "10.1002/(SICI)1097-4571(199505)46:4<327::AID-ASI5>3.0.CO;2-0";
+
+        assert_eq!(
+            extract_dois(text),
+            vec!["10.1002/(sici)1097-4571(199505)46:4<327::aid-asi5>3.0.co;2-0"]
         );
     }
 

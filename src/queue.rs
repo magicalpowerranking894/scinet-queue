@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const QUEUE_LOCK_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -223,7 +223,7 @@ impl fmt::Display for QueueError {
             QueueError::InvalidDoi(doi) => write!(f, "invalid DOI `{doi}`"),
             QueueError::QueueLocked(path) => write!(
                 f,
-                "queue is already in use: {}; wait for the other snq command to finish",
+                "queue is already in use: {}; wait for the other snq command to finish, or remove the lock if no snq process is running",
                 path.display()
             ),
         }
@@ -247,14 +247,22 @@ pub(crate) fn default_queue_path() -> PathBuf {
 }
 
 pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
-    let doi = raw
-        .trim()
-        .trim_start_matches("doi:")
-        .trim_start_matches("DOI:")
-        .trim_start_matches("https://doi.org/")
-        .trim_start_matches("http://doi.org/")
-        .trim()
-        .to_ascii_lowercase();
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let doi = if lower.starts_with("doi:") {
+        &trimmed[4..]
+    } else if lower.starts_with("https://doi.org/") {
+        &trimmed[16..]
+    } else if lower.starts_with("http://doi.org/") {
+        &trimmed[15..]
+    } else {
+        trimmed
+    }
+    .trim()
+    .split(['?', '#'])
+    .next()
+    .unwrap_or_default()
+    .to_ascii_lowercase();
 
     if doi.starts_with("10.")
         && doi.contains('/')
@@ -343,6 +351,18 @@ mod tests {
         assert_eq!(
             normalize_doi("doi:10.1093/rfs/hhaa075").unwrap(),
             "10.1093/rfs/hhaa075"
+        );
+        assert_eq!(
+            normalize_doi(" Doi:10.7000/Mixed ").unwrap(),
+            "10.7000/mixed"
+        );
+        assert_eq!(
+            normalize_doi("HTTPS://DOI.ORG/10.7000/URL").unwrap(),
+            "10.7000/url"
+        );
+        assert_eq!(
+            normalize_doi("https://doi.org/10.1000/ABC?utm_source=x#frag").unwrap(),
+            "10.1000/abc"
         );
     }
 

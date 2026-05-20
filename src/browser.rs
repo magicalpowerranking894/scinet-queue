@@ -83,9 +83,15 @@ impl Browser {
             command.arg("--new-window");
         }
 
-        let child = command.spawn()?;
-
-        let port = wait_for_devtools_port(&active_port_path, Duration::from_secs(10))?;
+        let mut child = command.spawn()?;
+        let port = match wait_for_devtools_port(&active_port_path, Duration::from_secs(10)) {
+            Ok(port) => port,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
 
         Ok(CdpBrowser {
             child,
@@ -511,6 +517,57 @@ mod tests {
 
         drop(lock);
         assert!(ProfileLock::acquire(&dir).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_cdp_launch_cleans_up_child_process() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = env::temp_dir().join(format!("snq-cdp-cleanup-test-{}", std::process::id()));
+        let profile = dir.join("profile");
+        let script = dir.join("fake-browser.sh");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) profile="${arg#--user-data-dir=}" ;;
+  esac
+done
+mkdir -p "$profile"
+printf 'not-a-port\n' > "$profile/DevToolsActivePort"
+sleep 60
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let browser = Browser {
+            engine: BrowserEngine::Chromium,
+            path: script,
+        };
+
+        let result = browser.launch_cdp(&profile);
+        assert!(matches!(
+            result,
+            Err(BrowserError::InvalidDevtoolsPort { .. })
+        ));
+
+        let output = Command::new("pgrep")
+            .args(["-f", profile.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "leftover process: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

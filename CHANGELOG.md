@@ -18,3 +18,5 @@
   issue templates.
 - Added queue locking, bounded CDP socket timeouts, package metadata, and
   public contribution safeguards.
+- Hardened CLI edge cases around argument validation, DOI normalization/import,
+  failed browser startup cleanup, request failures, and forced local approval.
