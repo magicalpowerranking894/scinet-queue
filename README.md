@@ -27,6 +27,7 @@ snq list
 snq remove 10.1287/mnsc.2024.05040
 snq check 10.1287/mnsc.2024.05040
 snq request 10.1287/mnsc.2024.05040 --reward 1
+snq request --all --reward 1
 snq watch
 snq fetch 10.1287/mnsc.2024.05040 --out papers
 snq fetch --out papers
@@ -67,6 +68,7 @@ loads with a logged-in session.
 prints the JSON response.
 
 `snq request <doi> --reward <n>` posts a Sci-Net request from the same session.
+`snq request --all --reward <n>` requests queued entries.
 
 `snq watch` checks queued requests for visible PDF uploads.
 

@@ -140,29 +140,40 @@ fn run() -> Result<(), String> {
             println!("{json}");
         }
         Some("request") => {
-            let Some(doi) = args.next() else {
-                return Err("request: missing DOI".to_string());
-            };
+            let request = parse_request(args)?;
+            let dois = request_dois(&queue, &request)?;
 
-            let reward = parse_reward(args)?;
-            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
-            let response = with_scinet_session(|port| request_doi(port, SCINET_URL, &doi, reward))?;
-            let json = format_response(&response)?;
-
-            match queue
-                .set_status(&doi, QueueStatus::Requested)
-                .map_err(|error| error.to_string())?
-            {
-                StatusResult::Updated(_) => {}
-                StatusResult::NotFound(_) => {
-                    let _ = queue.add(&doi).map_err(|error| error.to_string())?;
-                    let _ = queue
-                        .set_status(&doi, QueueStatus::Requested)
-                        .map_err(|error| error.to_string())?;
-                }
+            if dois.is_empty() {
+                println!("no queued entries");
+                return Ok(());
             }
 
-            println!("{json}");
+            let responses = with_scinet_port(|port| {
+                let mut responses = Vec::new();
+
+                for doi in &dois {
+                    let response = request_doi(port, SCINET_URL, doi, request.reward)
+                        .map_err(|error| error.to_string())?;
+
+                    if response.looks_logged_out() {
+                        return Err("not logged into Sci-Net; run `snq login` first".to_string());
+                    }
+
+                    responses.push(response);
+                }
+
+                Ok(responses)
+            })?;
+
+            for (doi, response) in dois.iter().zip(responses.iter()) {
+                mark_requested(&queue, doi)?;
+
+                if request.all {
+                    println!("requested\t{doi}");
+                } else {
+                    println!("{}", format_response(response)?);
+                }
+            }
         }
         Some("watch") => {
             let entries = queue.list().map_err(|error| error.to_string())?;
@@ -346,12 +357,21 @@ fn extract_dois(text: &str) -> Vec<String> {
     dois
 }
 
-fn parse_reward(args: impl Iterator<Item = String>) -> Result<u32, String> {
+struct RequestArgs {
+    doi: Option<String>,
+    reward: u32,
+    all: bool,
+}
+
+fn parse_request(args: impl Iterator<Item = String>) -> Result<RequestArgs, String> {
+    let mut doi = None;
     let mut reward = 1;
+    let mut all = false;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--all" => all = true,
             "--reward" | "-r" => {
                 let Some(value) = args.next() else {
                     return Err("request: missing value for --reward".to_string());
@@ -365,11 +385,59 @@ fn parse_reward(args: impl Iterator<Item = String>) -> Result<u32, String> {
                     return Err("request: reward must be greater than zero".to_string());
                 }
             }
-            unknown => return Err(format!("request: unknown option `{unknown}`")),
+            value if value.starts_with('-') => {
+                return Err(format!("request: unknown option `{value}`"));
+            }
+            value => {
+                if doi.is_some() {
+                    return Err(format!("request: unexpected argument `{value}`"));
+                }
+
+                doi = Some(normalize_doi(value).map_err(|error| error.to_string())?);
+            }
         }
     }
 
-    Ok(reward)
+    if all && doi.is_some() {
+        return Err("request: use either --all or one DOI".to_string());
+    }
+
+    if !all && doi.is_none() {
+        return Err("request: missing DOI".to_string());
+    }
+
+    Ok(RequestArgs { doi, reward, all })
+}
+
+fn request_dois(queue: &Queue, request: &RequestArgs) -> Result<Vec<String>, String> {
+    if let Some(doi) = &request.doi {
+        return Ok(vec![doi.clone()]);
+    }
+
+    let entries = queue.list().map_err(|error| error.to_string())?;
+
+    Ok(entries
+        .into_iter()
+        .filter(|entry| entry.status == QueueStatus::Queued)
+        .map(|entry| entry.doi)
+        .collect())
+}
+
+fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
+    match queue
+        .set_status(doi, QueueStatus::Requested)
+        .map_err(|error| error.to_string())?
+    {
+        StatusResult::Updated(_) => {}
+        StatusResult::NotFound(_) => {
+            let _ = queue.add(doi).map_err(|error| error.to_string())?;
+            let _ = queue
+                .set_status(doi, QueueStatus::Requested)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 struct FetchArgs {
@@ -510,7 +578,7 @@ Usage:
   snq list
   snq remove <doi>
   snq check <doi>
-  snq request <doi> --reward <n>
+  snq request <doi|--all> --reward <n>
   snq watch
   snq fetch [<doi>] [--out <dir>]
   snq approve <doi>
@@ -527,27 +595,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reward_defaults_to_one() {
-        assert_eq!(parse_reward(std::iter::empty()).unwrap(), 1);
+    fn request_accepts_doi_and_defaults_reward_to_one() {
+        let args =
+            parse_request(["10.1287/mnsc.2024.05040"].into_iter().map(str::to_string)).unwrap();
+
+        assert_eq!(args.doi.as_deref(), Some("10.1287/mnsc.2024.05040"));
+        assert_eq!(args.reward, 1);
+        assert!(!args.all);
     }
 
     #[test]
-    fn reward_accepts_long_and_short_flags() {
+    fn request_accepts_all_and_reward_flags() {
+        let args =
+            parse_request(["--all", "--reward", "3"].into_iter().map(str::to_string)).unwrap();
+
+        assert!(args.doi.is_none());
+        assert_eq!(args.reward, 3);
+        assert!(args.all);
+
         assert_eq!(
-            parse_reward(["--reward", "3"].into_iter().map(str::to_string)).unwrap(),
-            3
-        );
-        assert_eq!(
-            parse_reward(["-r", "2"].into_iter().map(str::to_string)).unwrap(),
-            2
+            parse_request(
+                ["10.1287/mnsc.2024.05040", "-r", "2"]
+                    .into_iter()
+                    .map(str::to_string)
+            )
+            .unwrap()
+            .reward,
+            2,
         );
     }
 
     #[test]
-    fn reward_rejects_zero_missing_and_unknown_values() {
-        assert!(parse_reward(["--reward", "0"].into_iter().map(str::to_string)).is_err());
-        assert!(parse_reward(["--reward"].into_iter().map(str::to_string)).is_err());
-        assert!(parse_reward(["--foo"].into_iter().map(str::to_string)).is_err());
+    fn request_rejects_missing_invalid_and_ambiguous_values() {
+        assert!(parse_request(std::iter::empty()).is_err());
+        assert!(parse_request(["--all", "--reward", "0"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_request(["--all", "--reward"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_request(["--foo"].into_iter().map(str::to_string)).is_err());
+        assert!(
+            parse_request(
+                ["--all", "10.1287/mnsc.2024.05040"]
+                    .into_iter()
+                    .map(str::to_string)
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -589,6 +680,32 @@ mod tests {
 
         assert_eq!(status, QueueStatus::Working);
         assert_eq!(entries[0].status, QueueStatus::Working);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn request_all_targets_only_queued_entries() {
+        let dir = std::env::temp_dir().join(format!("snq-request-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1287/mnsc.2024.05040").unwrap();
+        queue.add("10.1093/rfs/hhaa075").unwrap();
+        queue
+            .set_status("10.1093/rfs/hhaa075", QueueStatus::Requested)
+            .unwrap();
+
+        let request = RequestArgs {
+            doi: None,
+            reward: 1,
+            all: true,
+        };
+
+        assert_eq!(
+            request_dois(&queue, &request).unwrap(),
+            vec!["10.1287/mnsc.2024.05040".to_string()]
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
