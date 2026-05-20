@@ -12,7 +12,9 @@ use crate::output::{
     WatchOutput, compact_text, format_response, print_help, print_json,
 };
 use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
-use crate::papers::{FetchResult, extract_dois, fetch_dois, fetch_one, read_import_text};
+use crate::papers::{
+    FetchResult, extract_dois, fetch_dois, fetch_one, read_import_text, update_status_from_remote,
+};
 use crate::queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
 };
@@ -503,25 +505,6 @@ fn wait_for_login(engine: crate::browser::BrowserEngine, port: u16) -> Result<()
         }
 
         thread::sleep(Duration::from_secs(1));
-    }
-}
-
-fn update_status_from_remote(
-    queue: &Queue,
-    status: QueueStatus,
-    doi: &str,
-    remote_state: RequestRemoteState,
-) -> Result<QueueStatus, String> {
-    if remote_state == RequestRemoteState::Working
-        && matches!(status, QueueStatus::Queued | QueueStatus::Requested)
-    {
-        queue
-            .set_status(doi, QueueStatus::Working)
-            .map_err(|error| error.to_string())?;
-
-        Ok(QueueStatus::Working)
-    } else {
-        Ok(status)
     }
 }
 

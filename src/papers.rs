@@ -112,6 +112,10 @@ pub(crate) fn fetch_one(
     }
 
     let Some(pdf_url) = view.pdf_urls.first() else {
+        if let Some(status) = queue_status(queue, doi)? {
+            let _ = update_status_from_remote(queue, status, doi, remote_state)?;
+        }
+
         return Ok(FetchResult::NoPdf(remote_state));
     };
     let download = download_pdf(page, pdf_url).map_err(|error| error.to_string())?;
@@ -130,6 +134,34 @@ pub(crate) fn fetch_one(
 pub(crate) enum FetchResult {
     Fetched(PathBuf),
     NoPdf(RequestRemoteState),
+}
+
+pub(crate) fn update_status_from_remote(
+    queue: &Queue,
+    status: QueueStatus,
+    doi: &str,
+    remote_state: RequestRemoteState,
+) -> Result<QueueStatus, String> {
+    if remote_state == RequestRemoteState::Working
+        && matches!(status, QueueStatus::Queued | QueueStatus::Requested)
+    {
+        queue
+            .set_status(doi, QueueStatus::Working)
+            .map_err(|error| error.to_string())?;
+
+        Ok(QueueStatus::Working)
+    } else {
+        Ok(status)
+    }
+}
+
+fn queue_status(queue: &Queue, doi: &str) -> Result<Option<QueueStatus>, String> {
+    Ok(queue
+        .list()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|entry| entry.doi == doi)
+        .map(|entry| entry.status))
 }
 
 fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -346,7 +378,33 @@ mod tests {
             result,
             FetchResult::NoPdf(RequestRemoteState::Working)
         ));
-        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Queued);
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Working);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remote_working_state_does_not_regress_fetched_entries() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-fetch-no-regress-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1000/snq-example").unwrap();
+        queue
+            .set_status("10.1000/snq-example", QueueStatus::Fetched)
+            .unwrap();
+
+        let status = update_status_from_remote(
+            &queue,
+            QueueStatus::Fetched,
+            "10.1000/snq-example",
+            RequestRemoteState::Working,
+        )
+        .unwrap();
+
+        assert_eq!(status, QueueStatus::Fetched);
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Fetched);
 
         let _ = fs::remove_dir_all(dir);
     }
