@@ -208,14 +208,14 @@ pub fn request_doi(
 }
 
 pub fn approve_doi(port: u16, url: &str, doi: &str) -> Result<ScinetResponse, CdpError> {
-    let doi_path = doi.replace('/', "%2F");
+    let doi_path = path_segment(doi);
     scinet_get(port, url, &format!("/accept/{doi_path}"))
 }
 
 pub fn view_request(port: u16, url: &str, doi: &str) -> Result<RequestView, CdpError> {
     let target = page_target(port)?;
     let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
-    let doi_path = doi.replace('/', "%2F");
+    let doi_path = path_segment(doi);
     let view_url = format!("{}/view/{}", url.trim_end_matches('/'), doi_path);
 
     cdp.navigate(&view_url)?;
@@ -336,6 +336,21 @@ fn scinet_post(
     ))?;
 
     serde_json::from_value(value).map_err(CdpError::Json)
+}
+
+fn path_segment(value: &str) -> String {
+    let mut encoded = String::new();
+
+    for byte in value.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    encoded
 }
 
 fn page_target(port: u16) -> Result<Target, CdpError> {
@@ -509,5 +524,17 @@ mod tests {
         };
 
         assert_eq!(view.remote_state(), RequestRemoteState::Working);
+    }
+
+    #[test]
+    fn encodes_doi_as_one_path_segment() {
+        assert_eq!(
+            path_segment("10.1287/mnsc.2024.05040"),
+            "10.1287%2Fmnsc.2024.05040"
+        );
+        assert_eq!(
+            path_segment("10.1000/foo?bar#baz"),
+            "10.1000%2Ffoo%3Fbar%23baz"
+        );
     }
 }
