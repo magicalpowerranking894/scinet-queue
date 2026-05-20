@@ -2,6 +2,7 @@ use directories::ProjectDirs;
 use std::env;
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -59,6 +60,7 @@ impl Browser {
         }
 
         fs::create_dir_all(profile_dir)?;
+        let lock = ProfileLock::acquire(profile_dir)?;
         let active_port_path = profile_dir.join("DevToolsActivePort");
         let _ = fs::remove_file(&active_port_path);
 
@@ -84,7 +86,11 @@ impl Browser {
 
         let port = wait_for_devtools_port(&active_port_path, Duration::from_secs(10))?;
 
-        Ok(CdpBrowser { child, port })
+        Ok(CdpBrowser {
+            child,
+            port,
+            _lock: lock,
+        })
     }
 }
 
@@ -92,6 +98,7 @@ impl Browser {
 pub struct CdpBrowser {
     child: Child,
     port: u16,
+    _lock: ProfileLock,
 }
 
 impl CdpBrowser {
@@ -137,6 +144,7 @@ pub enum BrowserError {
     NoProjectDirs,
     NoBrowserFound,
     EnvBrowserNotFound(PathBuf),
+    ProfileLocked(PathBuf),
     UnsupportedCdpEngine(BrowserEngine),
     DevtoolsPortTimeout(PathBuf),
     InvalidDevtoolsPort { path: PathBuf, value: String },
@@ -153,6 +161,13 @@ impl fmt::Display for BrowserError {
             ),
             BrowserError::EnvBrowserNotFound(path) => {
                 write!(f, "{BROWSER_ENV} does not exist: {}", path.display())
+            }
+            BrowserError::ProfileLocked(path) => {
+                write!(
+                    f,
+                    "managed browser profile is already in use: {}; wait for the other snq command to finish",
+                    path.display()
+                )
             }
             BrowserError::UnsupportedCdpEngine(engine) => {
                 write!(
@@ -283,6 +298,39 @@ fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Pa
         BrowserEngine::Firefox => {
             command.arg("--profile").arg(profile_dir).arg(SCINET_URL);
         }
+    }
+}
+
+#[derive(Debug)]
+struct ProfileLock {
+    path: PathBuf,
+}
+
+impl ProfileLock {
+    fn acquire(profile_dir: &Path) -> Result<Self, BrowserError> {
+        let path = profile_dir.join(".snq-profile.lock");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    BrowserError::ProfileLocked(path.clone())
+                } else {
+                    BrowserError::Io(error)
+                }
+            })?;
+
+        writeln!(file, "{}", std::process::id())?;
+        file.sync_all()?;
+
+        Ok(Self { path })
+    }
+}
+
+impl Drop for ProfileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -447,5 +495,22 @@ mod tests {
             Some(9333)
         );
         assert_eq!(parse_devtools_port("nope\n/devtools/browser/abc\n"), None);
+    }
+
+    #[test]
+    fn profile_lock_rejects_concurrent_acquire() {
+        let dir = env::temp_dir().join(format!("snq-profile-lock-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let lock = ProfileLock::acquire(&dir).unwrap();
+        let second = ProfileLock::acquire(&dir);
+
+        assert!(matches!(second, Err(BrowserError::ProfileLocked(_))));
+
+        drop(lock);
+        assert!(ProfileLock::acquire(&dir).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
     }
 }
