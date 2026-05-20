@@ -8,7 +8,7 @@ The binary is `snq`.
 ## Status
 
 Early development. The local queue, Chromium session probe, Sci-Net search,
-request, watch, and fetch commands are supported.
+request, watch, fetch, and approve commands are supported.
 
 ## Install
 
@@ -28,6 +28,7 @@ snq check 10.1287/mnsc.2024.05040
 snq request 10.1287/mnsc.2024.05040 --reward 1
 snq watch
 snq fetch 10.1287/mnsc.2024.05040 --out papers
+snq approve 10.1287/mnsc.2024.05040
 ```
 
 `snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
@@ -66,6 +67,9 @@ prints the JSON response.
 
 `snq fetch <doi> --out <dir>` downloads an available PDF into the output
 directory and marks the queue entry as fetched.
+
+`snq approve <doi>` accepts a submitted solution and marks the queue entry as
+approved.
 
 This avoids decrypting cookies from Chrome, Firefox, Edge, Brave, Zen, or the
 operating system keychain. Importing an existing browser profile is outside the

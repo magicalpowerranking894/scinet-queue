@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
 use cdp::{
-    RequestView, ScinetResponse, download_pdf, probe_session, request_doi, search_doi, view_request,
+    RequestView, ScinetResponse, approve_doi, download_pdf, probe_session, request_doi, search_doi,
+    view_request,
 };
 use queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
@@ -198,7 +199,23 @@ fn run() -> Result<(), String> {
             println!("{}", out_path.display());
         }
         Some("approve") => {
-            return Err("command is scaffolded but not implemented yet".to_string());
+            let Some(doi) = args.next() else {
+                return Err("approve: missing DOI".to_string());
+            };
+
+            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
+            let response = with_scinet_session(|port| approve_doi(port, SCINET_URL, &doi))?;
+            let json = format_response(&response)?;
+
+            match queue
+                .set_status(&doi, QueueStatus::Approved)
+                .map_err(|error| error.to_string())?
+            {
+                StatusResult::Updated(_) => {}
+                StatusResult::NotFound(_) => {}
+            }
+
+            println!("{json}");
         }
         Some(command) => {
             return Err(format!(
