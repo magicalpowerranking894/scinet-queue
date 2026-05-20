@@ -10,6 +10,10 @@ The binary is `snq`.
 Early development. The local queue, Chromium session probe, Sci-Net search,
 request, watch, fetch, and approve commands are supported.
 
+Authenticated commands currently require a Chromium-compatible browser with
+Chrome DevTools Protocol support. macOS, Linux, and Windows builds are checked
+in CI. Firefox and Zen support is planned, but not implemented.
+
 ## Install
 
 ```sh
@@ -110,6 +114,13 @@ Chromium-compatible browsers are supported first through Chrome DevTools
 Protocol. Firefox support is planned through WebDriver BiDi.
 
 Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
+
+## Responsible Use
+
+`scinet-queue` is an independent tool for automating a user's own Sci-Net
+session. It is not affiliated with Sci-Net, third-party paper index, or any publisher. It does
+not bypass authentication, paywalls, or access controls. Use it only where you
+have the right to request, download, and store the papers involved.
 
 ## Storage
 
