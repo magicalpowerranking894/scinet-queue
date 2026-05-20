@@ -50,12 +50,12 @@ impl Browser {
         Ok(child.id())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn launch_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
         self.launch_chromium_cdp(profile_dir, true)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn launch_cdp_with_env(
         &self,
         profile_dir: &Path,
