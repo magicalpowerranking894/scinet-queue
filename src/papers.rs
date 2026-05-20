@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::page::PageSession;
 use crate::queue::{Queue, QueueStatus, StatusResult, normalize_doi};
-use crate::scinet::{SCINET_URL, download_pdf, view_request};
+use crate::scinet::{RequestRemoteState, SCINET_URL, download_pdf, view_request};
 
 pub(crate) fn read_import_text(path: &str) -> Result<String, String> {
     if path == "-" {
@@ -103,15 +103,16 @@ pub(crate) fn fetch_one(
     page: &mut impl PageSession,
     doi: &str,
     out_dir: &Path,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<FetchResult, String> {
     let view = view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
+    let remote_state = view.remote_state();
 
-    if view.looks_logged_out() {
+    if remote_state == RequestRemoteState::LoggedOut {
         return Err("not logged into Sci-Net; run `snq login` first".to_string());
     }
 
     let Some(pdf_url) = view.pdf_urls.first() else {
-        return Ok(None);
+        return Ok(FetchResult::NoPdf(remote_state));
     };
     let download = download_pdf(page, pdf_url).map_err(|error| error.to_string())?;
 
@@ -123,7 +124,12 @@ pub(crate) fn fetch_one(
 
     mark_fetched(queue, doi)?;
 
-    Ok(Some(out_path))
+    Ok(FetchResult::Fetched(out_path))
+}
+
+pub(crate) enum FetchResult {
+    Fetched(PathBuf),
+    NoPdf(RequestRemoteState),
 }
 
 fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -324,5 +330,44 @@ mod tests {
         assert_eq!(entries[0].status, QueueStatus::Fetched);
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fetch_one_reports_working_state_without_pdf() {
+        let dir = std::env::temp_dir().join(format!("snq-fetch-state-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = FakePageSession;
+
+        queue.add("10.1000/snq-example").unwrap();
+        let result = fetch_one(&queue, &mut page, "10.1000/snq-example", &dir).unwrap();
+
+        assert!(matches!(
+            result,
+            FetchResult::NoPdf(RequestRemoteState::Working)
+        ));
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Queued);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    struct FakePageSession;
+
+    impl PageSession for FakePageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(
+            &mut self,
+            _expression: &str,
+        ) -> Result<serde_json::Value, crate::page::PageError> {
+            Ok(serde_json::json!({
+                "title": "Sci-Net",
+                "url": "https://sci-net.xyz/10.1000/snq-example",
+                "text": "A member is working on solving this request and will upload PDF soon.",
+                "pdf_urls": []
+            }))
+        }
     }
 }

@@ -74,6 +74,7 @@ pub(crate) struct RequestOutput {
 pub(crate) struct FetchOutput {
     pub(crate) doi: String,
     pub(crate) status: FetchOutputStatus,
+    pub(crate) remote_state: RequestRemoteState,
     pub(crate) path: Option<String>,
 }
 
@@ -122,5 +123,20 @@ mod tests {
         assert_eq!(compact.split_whitespace().count(), 120);
         assert!(compact.starts_with("word0 word1"));
         assert!(!compact.contains("word129"));
+    }
+
+    #[test]
+    fn fetch_output_includes_remote_state() {
+        let output = FetchOutput {
+            doi: "10.1000/snq-example".to_string(),
+            status: FetchOutputStatus::NoPdf,
+            remote_state: RequestRemoteState::Working,
+            path: None,
+        };
+        let value = serde_json::to_value(output).unwrap();
+
+        assert_eq!(value["status"], "no-pdf");
+        assert_eq!(value["remote_state"], "working");
+        assert!(value["path"].is_null());
     }
 }

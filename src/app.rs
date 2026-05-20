@@ -12,7 +12,7 @@ use crate::output::{
     WatchOutput, compact_text, format_response, print_help, print_json,
 };
 use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
-use crate::papers::{extract_dois, fetch_dois, fetch_one, read_import_text};
+use crate::papers::{FetchResult, extract_dois, fetch_dois, fetch_one, read_import_text};
 use crate::queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
 };
@@ -353,17 +353,19 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 
                     for doi in &dois {
                         match fetch_one(&queue, page, doi, &fetch.out_dir) {
-                            Ok(Some(path)) => {
+                            Ok(FetchResult::Fetched(path)) => {
                                 fetched_any = true;
                                 outputs.push(FetchOutput {
                                     doi: doi.clone(),
                                     status: FetchOutputStatus::Fetched,
+                                    remote_state: RequestRemoteState::Pdf,
                                     path: Some(path.display().to_string()),
                                 });
                             }
-                            Ok(None) => outputs.push(FetchOutput {
+                            Ok(FetchResult::NoPdf(remote_state)) => outputs.push(FetchOutput {
                                 doi: doi.clone(),
                                 status: FetchOutputStatus::NoPdf,
+                                remote_state,
                                 path: None,
                             }),
                             Err(error) => return Err(error),
@@ -389,7 +391,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 .iter()
                 .all(|output| output.path.as_deref().is_none())
             {
-                println!("no PDFs available");
+                for output in outputs {
+                    println!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi);
+                }
             } else {
                 for output in outputs {
                     if let Some(path) = output.path {
