@@ -3,12 +3,17 @@
 `scinet-queue` is a small Rust CLI. Keep changes narrow, explicit, and easy to
 review.
 
-## Setup
+## Local Checks
 
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked
+```
+
+Run the package check before a release or when changing crate metadata:
+
+```sh
 cargo package --locked
 ```
 
@@ -18,6 +23,9 @@ cargo package --locked
 - Explain the behavior change.
 - Add tests for parser, queue, state, and network edge behavior.
 - Avoid unrelated formatting or refactors.
+- Use pull requests for code changes to `main`.
+- Let the full CI matrix pass before merging.
+- Use draft pull requests or temporary branches for platform-specific CI work.
 
 ## Project Layout
 
