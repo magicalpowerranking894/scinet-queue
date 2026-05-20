@@ -235,12 +235,8 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                         return Err("not logged into Sci-Net; run `snq login` first".to_string());
                     }
 
-                    ensure_request_ok(doi, &response)?;
+                    record_successful_request(&queue, doi, &response)?;
                     responses.push(response);
-                }
-
-                for doi in &dois {
-                    mark_requested(&queue, doi)?;
                 }
 
                 Ok(responses)
@@ -573,6 +569,15 @@ fn ensure_request_ok(doi: &str, response: &ScinetResponse) -> Result<(), String>
     }
 }
 
+fn record_successful_request(
+    queue: &Queue,
+    doi: &str,
+    response: &ScinetResponse,
+) -> Result<(), String> {
+    ensure_request_ok(doi, response)?;
+    mark_requested(queue, doi)
+}
+
 fn mark_approved(queue: &Queue, doi: &str) -> Result<(), String> {
     match queue
         .set_status(doi, QueueStatus::Approved)
@@ -663,6 +668,39 @@ mod tests {
             request_dois(&queue, &request).unwrap(),
             vec!["10.1000/snq-example".to_string()]
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn successful_request_is_marked_before_later_failure() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-request-partial-failure-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1000/snq-example").unwrap();
+        queue.add("10.1000/snq-alt").unwrap();
+
+        let ok = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "success": true }),
+        };
+        let logical_error = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "success": false, "message": "invalid request" }),
+        };
+
+        record_successful_request(&queue, "10.1000/snq-example", &ok).unwrap();
+        assert!(record_successful_request(&queue, "10.1000/snq-alt", &logical_error).is_err());
+
+        let entries = queue.list().unwrap();
+        assert_eq!(entries[0].status, QueueStatus::Requested);
+        assert_eq!(entries[1].status, QueueStatus::Queued);
 
         let _ = fs::remove_dir_all(dir);
     }
