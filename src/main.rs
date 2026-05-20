@@ -248,11 +248,9 @@ fn run() -> Result<(), String> {
             }
         }
         Some("approve") => {
-            let Some(doi) = args.next() else {
-                return Err("approve: missing DOI".to_string());
-            };
-
-            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
+            let approve = parse_approve(args)?;
+            let doi = approve.doi;
+            ensure_can_approve(&queue, &doi, approve.force)?;
             let response = with_scinet_session(|port| approve_doi(port, SCINET_URL, &doi))?;
             let json = format_response(&response)?;
 
@@ -499,6 +497,57 @@ struct FetchArgs {
     poll_secs: u64,
 }
 
+struct ApproveArgs {
+    doi: String,
+    force: bool,
+}
+
+fn parse_approve(args: impl Iterator<Item = String>) -> Result<ApproveArgs, String> {
+    let mut doi = None;
+    let mut force = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--force" => force = true,
+            value if value.starts_with('-') => {
+                return Err(format!("approve: unknown option `{value}`"));
+            }
+            value => {
+                if doi.is_some() {
+                    return Err(format!("approve: unexpected argument `{value}`"));
+                }
+
+                doi = Some(normalize_doi(value).map_err(|error| error.to_string())?);
+            }
+        }
+    }
+
+    let Some(doi) = doi else {
+        return Err("approve: missing DOI".to_string());
+    };
+
+    Ok(ApproveArgs { doi, force })
+}
+
+fn ensure_can_approve(queue: &Queue, doi: &str, force: bool) -> Result<(), String> {
+    if force {
+        return Ok(());
+    }
+
+    let entries = queue.list().map_err(|error| error.to_string())?;
+
+    if entries
+        .iter()
+        .any(|entry| entry.doi == doi && entry.status == QueueStatus::Fetched)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "approve: {doi} is not fetched; run `snq fetch {doi}` first or pass --force"
+        ))
+    }
+}
+
 fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArgs, String> {
     let mut doi = None;
     let mut out_dir = std::path::PathBuf::from("papers");
@@ -656,7 +705,7 @@ Usage:
   snq request <doi|--all> --reward <n>
   snq watch
   snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>]
-  snq approve <doi>
+  snq approve <doi> [--force]
 
 Options:
       --no-wait     Open login browser without waiting for authentication
@@ -793,6 +842,39 @@ mod tests {
             request_dois(&queue, &request).unwrap(),
             vec!["10.1287/mnsc.2024.05040".to_string()]
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn approve_requires_doi_and_accepts_force() {
+        let args = parse_approve(
+            ["10.1287/mnsc.2024.05040", "--force"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(args.doi, "10.1287/mnsc.2024.05040");
+        assert!(args.force);
+        assert!(parse_approve(std::iter::empty()).is_err());
+        assert!(parse_approve(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn approve_requires_fetched_status_unless_forced() {
+        let dir = std::env::temp_dir().join(format!("snq-approve-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1287/mnsc.2024.05040").unwrap();
+        assert!(ensure_can_approve(&queue, "10.1287/mnsc.2024.05040", false).is_err());
+
+        queue
+            .set_status("10.1287/mnsc.2024.05040", QueueStatus::Fetched)
+            .unwrap();
+        assert!(ensure_can_approve(&queue, "10.1287/mnsc.2024.05040", false).is_ok());
+        assert!(ensure_can_approve(&queue, "10.1093/rfs/hhaa075", true).is_ok());
 
         let _ = fs::remove_dir_all(dir);
     }
