@@ -9,6 +9,8 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket, connect};
 
 const CDP_IO_TIMEOUT: Duration = Duration::from_secs(15);
+const READY_STATE_ATTEMPTS: usize = 50;
+const READY_STATE_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub(crate) enum CdpError {
@@ -18,6 +20,8 @@ pub(crate) enum CdpError {
     Json(serde_json::Error),
     WebSocket(tungstenite::Error),
     NoPageTarget,
+    ProtocolError(Value),
+    ReadyStateTimeout,
     UnexpectedResponse(Value),
 }
 
@@ -30,6 +34,10 @@ impl fmt::Display for CdpError {
             CdpError::Json(error) => write!(f, "{error}"),
             CdpError::WebSocket(error) => write!(f, "{error}"),
             CdpError::NoPageTarget => write!(f, "could not find a CDP page target"),
+            CdpError::ProtocolError(value) => write!(f, "CDP returned error: {value}"),
+            CdpError::ReadyStateTimeout => {
+                write!(f, "timed out waiting for page readiness")
+            }
             CdpError::UnexpectedResponse(value) => write!(f, "unexpected CDP response: {value}"),
         }
     }
@@ -112,17 +120,25 @@ impl CdpConnection {
     }
 
     fn wait_for_ready_state(&mut self) -> Result<(), CdpError> {
-        for _ in 0..50 {
+        self.wait_for_ready_state_with(READY_STATE_ATTEMPTS, READY_STATE_POLL)
+    }
+
+    fn wait_for_ready_state_with(
+        &mut self,
+        attempts: usize,
+        poll: Duration,
+    ) -> Result<(), CdpError> {
+        for _ in 0..attempts {
             let value = self.evaluate_json("document.readyState")?;
 
             if matches!(value.as_str(), Some("interactive" | "complete")) {
                 return Ok(());
             }
 
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(poll);
         }
 
-        Ok(())
+        Err(CdpError::ReadyStateTimeout)
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, CdpError> {
@@ -149,6 +165,10 @@ impl CdpConnection {
                 continue;
             }
 
+            if let Some(error) = response.get("error") {
+                return Err(CdpError::ProtocolError(error.clone()));
+            }
+
             return response
                 .get("result")
                 .cloned()
@@ -172,4 +192,98 @@ pub(crate) struct Target {
     kind: String,
     #[serde(rename = "webSocketDebuggerUrl")]
     pub(crate) web_socket_debugger_url: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn cdp_connection_reports_protocol_error_packet() {
+        let port = start_fake_cdp_server(FakeCdpMode::ProtocolError);
+        let mut connection = connect_fake_cdp(port);
+
+        let error = connection.evaluate_json("1 + 1").err().unwrap();
+
+        assert!(matches!(error, CdpError::ProtocolError(_)));
+        assert!(error.to_string().contains("fake CDP failure"));
+    }
+
+    #[test]
+    fn cdp_ready_state_timeout_is_explicit() {
+        let port = start_fake_cdp_server(FakeCdpMode::LoadingReadyState);
+        let mut connection = connect_fake_cdp(port);
+
+        let error = connection
+            .wait_for_ready_state_with(1, Duration::ZERO)
+            .err()
+            .unwrap();
+
+        assert!(matches!(error, CdpError::ReadyStateTimeout));
+    }
+
+    #[derive(Clone, Copy)]
+    enum FakeCdpMode {
+        ProtocolError,
+        LoadingReadyState,
+    }
+
+    fn connect_fake_cdp(port: u16) -> CdpConnection {
+        CdpConnection::connect(&format!("ws://127.0.0.1:{port}/devtools/page/1")).unwrap()
+    }
+
+    fn start_fake_cdp_server(mode: FakeCdpMode) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+
+            loop {
+                let Ok(message) = socket.read() else {
+                    break;
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let id = request.get("id").and_then(Value::as_u64).unwrap();
+
+                match mode {
+                    FakeCdpMode::ProtocolError => send_response(
+                        &mut socket,
+                        json!({
+                            "id": id,
+                            "error": {
+                                "code": -32000,
+                                "message": "fake CDP failure"
+                            }
+                        }),
+                    ),
+                    FakeCdpMode::LoadingReadyState => send_response(
+                        &mut socket,
+                        json!({
+                            "id": id,
+                            "result": {
+                                "result": {
+                                    "type": "string",
+                                    "value": "loading"
+                                }
+                            }
+                        }),
+                    ),
+                }
+            }
+        });
+
+        port
+    }
+
+    fn send_response(socket: &mut tungstenite::WebSocket<TcpStream>, value: Value) {
+        socket
+            .send(Message::Text(value.to_string().into()))
+            .unwrap();
+    }
 }

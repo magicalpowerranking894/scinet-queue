@@ -10,6 +10,8 @@ use tungstenite::{Message, WebSocket, connect};
 const BIDI_IO_TIMEOUT: Duration = Duration::from_secs(15);
 const BIDI_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const BIDI_CONNECT_POLL: Duration = Duration::from_millis(50);
+const READY_STATE_ATTEMPTS: usize = 50;
+const READY_STATE_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub(crate) enum BidiError {
@@ -17,6 +19,8 @@ pub(crate) enum BidiError {
     Json(serde_json::Error),
     WebSocket(tungstenite::Error),
     ConnectTimeout(u16),
+    ProtocolError(Value),
+    ReadyStateTimeout,
     UnexpectedResponse(Value),
 }
 
@@ -28,6 +32,10 @@ impl fmt::Display for BidiError {
             BidiError::WebSocket(error) => write!(f, "{error}"),
             BidiError::ConnectTimeout(port) => {
                 write!(f, "timed out connecting to BiDi on 127.0.0.1:{port}")
+            }
+            BidiError::ProtocolError(value) => write!(f, "BiDi returned error: {value}"),
+            BidiError::ReadyStateTimeout => {
+                write!(f, "timed out waiting for page readiness")
             }
             BidiError::UnexpectedResponse(value) => {
                 write!(f, "unexpected BiDi response: {value}")
@@ -139,17 +147,25 @@ impl BidiConnection {
     }
 
     fn wait_for_ready_state(&mut self) -> Result<(), BidiError> {
-        for _ in 0..50 {
+        self.wait_for_ready_state_with(READY_STATE_ATTEMPTS, READY_STATE_POLL)
+    }
+
+    fn wait_for_ready_state_with(
+        &mut self,
+        attempts: usize,
+        poll: Duration,
+    ) -> Result<(), BidiError> {
+        for _ in 0..attempts {
             let value = self.evaluate_json("document.readyState")?;
 
             if matches!(value.as_str(), Some("interactive" | "complete")) {
                 return Ok(());
             }
 
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(poll);
         }
 
-        Ok(())
+        Err(BidiError::ReadyStateTimeout)
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, BidiError> {
@@ -177,7 +193,7 @@ impl BidiConnection {
             }
 
             if response.get("type").and_then(Value::as_str) == Some("error") {
-                return Err(BidiError::UnexpectedResponse(response));
+                return Err(BidiError::ProtocolError(response));
             }
 
             return response
@@ -206,7 +222,7 @@ mod tests {
     #[test]
     fn bidi_connection_ignores_events_and_evaluates_json() {
         let methods = Arc::new(Mutex::new(Vec::new()));
-        let port = start_fake_bidi_server(methods.clone(), false);
+        let port = start_fake_bidi_server(methods.clone(), FakeBidiMode::Ok);
 
         let mut connection =
             BidiConnection::connect_with_timeout(port, Duration::from_secs(2)).unwrap();
@@ -231,17 +247,39 @@ mod tests {
     #[test]
     fn bidi_connection_reports_error_response() {
         let methods = Arc::new(Mutex::new(Vec::new()));
-        let port = start_fake_bidi_server(methods, true);
+        let port = start_fake_bidi_server(methods, FakeBidiMode::FailSession);
 
         let error = BidiConnection::connect_with_timeout(port, Duration::from_secs(2))
             .err()
             .unwrap();
 
-        assert!(matches!(error, BidiError::UnexpectedResponse(_)));
+        assert!(matches!(error, BidiError::ProtocolError(_)));
         assert!(error.to_string().contains("session not created"));
     }
 
-    fn start_fake_bidi_server(methods: Arc<Mutex<Vec<&'static str>>>, fail_session: bool) -> u16 {
+    #[test]
+    fn bidi_ready_state_timeout_is_explicit() {
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let port = start_fake_bidi_server(methods, FakeBidiMode::NeverReady);
+        let mut connection =
+            BidiConnection::connect_with_timeout(port, Duration::from_secs(2)).unwrap();
+
+        let error = connection
+            .wait_for_ready_state_with(1, Duration::ZERO)
+            .err()
+            .unwrap();
+
+        assert!(matches!(error, BidiError::ReadyStateTimeout));
+    }
+
+    #[derive(Clone, Copy)]
+    enum FakeBidiMode {
+        Ok,
+        FailSession,
+        NeverReady,
+    }
+
+    fn start_fake_bidi_server(methods: Arc<Mutex<Vec<&'static str>>>, mode: FakeBidiMode) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -264,7 +302,7 @@ mod tests {
                     "session.new" => {
                         methods.lock().unwrap().push("session.new");
 
-                        if fail_session {
+                        if matches!(mode, FakeBidiMode::FailSession) {
                             send_response(
                                 &mut socket,
                                 json!({
@@ -324,7 +362,10 @@ mod tests {
                             .and_then(Value::as_str)
                             .unwrap_or_default();
                         let value = if expression.contains("document.readyState") {
-                            "\"complete\""
+                            match mode {
+                                FakeBidiMode::NeverReady => "\"loading\"",
+                                FakeBidiMode::Ok | FakeBidiMode::FailSession => "\"complete\"",
+                            }
                         } else {
                             "{\"answer\":42,\"ok\":true}"
                         };
