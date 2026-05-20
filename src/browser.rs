@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::scinet::SCINET_URL;
 
@@ -84,14 +84,15 @@ impl Browser {
         }
 
         let mut child = command.spawn()?;
-        let port = match wait_for_devtools_port(&active_port_path, Duration::from_secs(10)) {
-            Ok(port) => port,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
+        let port =
+            match wait_for_devtools_port(&active_port_path, &mut child, Duration::from_secs(10)) {
+                Ok(port) => port,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            };
 
         Ok(CdpBrowser {
             child,
@@ -153,6 +154,7 @@ pub(crate) enum BrowserError {
     EnvBrowserNotFound(PathBuf),
     ProfileLocked(PathBuf),
     UnsupportedCdpEngine(BrowserEngine),
+    BrowserExited,
     DevtoolsPortTimeout(PathBuf),
     InvalidDevtoolsPort { path: PathBuf, value: String },
 }
@@ -182,6 +184,7 @@ impl fmt::Display for BrowserError {
                     "CDP session probe is not supported for {engine} browsers yet"
                 )
             }
+            BrowserError::BrowserExited => write!(f, "browser exited before CDP became available"),
             BrowserError::DevtoolsPortTimeout(path) => {
                 write!(f, "timed out waiting for {}", path.display())
             }
@@ -271,19 +274,30 @@ fn find_in_path(command: &Path) -> Option<PathBuf> {
     None
 }
 
-fn wait_for_devtools_port(path: &Path, timeout: Duration) -> Result<u16, BrowserError> {
+fn wait_for_devtools_port(
+    path: &Path,
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<u16, BrowserError> {
     let start = Instant::now();
 
     while start.elapsed() < timeout {
+        if child.try_wait()?.is_some() {
+            return Err(BrowserError::BrowserExited);
+        }
+
         if let Ok(contents) = fs::read_to_string(path) {
             if let Some(port) = parse_devtools_port(&contents) {
                 return Ok(port);
             }
 
-            return Err(BrowserError::InvalidDevtoolsPort {
-                path: path.to_path_buf(),
-                value: contents.lines().next().unwrap_or_default().to_string(),
-            });
+            let value = contents.lines().next().unwrap_or_default().trim();
+            if !value.is_empty() {
+                return Err(BrowserError::InvalidDevtoolsPort {
+                    path: path.to_path_buf(),
+                    value: value.to_string(),
+                });
+            }
         }
 
         thread::sleep(Duration::from_millis(50));
@@ -311,11 +325,13 @@ fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Pa
 #[derive(Debug)]
 struct ProfileLock {
     path: PathBuf,
+    token: String,
 }
 
 impl ProfileLock {
     fn acquire(profile_dir: &Path) -> Result<Self, BrowserError> {
         let path = profile_dir.join(".snq-profile.lock");
+        let token = lock_token();
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -328,17 +344,37 @@ impl ProfileLock {
                 }
             })?;
 
-        writeln!(file, "{}", std::process::id())?;
+        writeln!(file, "{token}")?;
         file.sync_all()?;
 
-        Ok(Self { path })
+        Ok(Self { path, token })
     }
 }
 
 impl Drop for ProfileLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        remove_lock_if_owned(&self.path, &self.token);
     }
+}
+
+fn lock_token() -> String {
+    format!("{}:{}", std::process::id(), unix_time_millis())
+}
+
+fn remove_lock_if_owned(path: &Path, token: &str) {
+    if fs::read_to_string(path)
+        .map(|contents| contents.trim() == token)
+        .unwrap_or(false)
+    {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn unix_time_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[cfg(target_os = "macos")]
@@ -517,6 +553,99 @@ mod tests {
 
         drop(lock);
         assert!(ProfileLock::acquire(&dir).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn profile_lock_drop_preserves_replacement_lock() {
+        let dir = env::temp_dir().join(format!(
+            "snq-profile-lock-owner-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".snq-profile.lock");
+
+        let first = ProfileLock::acquire(&dir).unwrap();
+        fs::remove_file(&path).unwrap();
+        let second = ProfileLock::acquire(&dir).unwrap();
+
+        drop(first);
+        assert!(matches!(
+            ProfileLock::acquire(&dir),
+            Err(BrowserError::ProfileLocked(_))
+        ));
+
+        drop(second);
+        assert!(ProfileLock::acquire(&dir).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cdp_launch_retries_empty_devtools_port_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = env::temp_dir().join(format!("snq-cdp-empty-port-test-{}", std::process::id()));
+        let profile = dir.join("profile");
+        let script = dir.join("fake-browser.sh");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) profile="${arg#--user-data-dir=}" ;;
+  esac
+done
+mkdir -p "$profile"
+: > "$profile/DevToolsActivePort"
+sleep 0.1
+printf '9222\n/devtools/browser/fake\n' > "$profile/DevToolsActivePort"
+sleep 60
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let browser = Browser {
+            engine: BrowserEngine::Chromium,
+            path: script,
+        };
+        let cdp = browser.launch_cdp(&profile).unwrap();
+
+        assert_eq!(cdp.port(), 9222);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cdp_launch_reports_early_browser_exit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = env::temp_dir().join(format!("snq-cdp-early-exit-test-{}", std::process::id()));
+        let profile = dir.join("profile");
+        let script = dir.join("fake-browser.sh");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let browser = Browser {
+            engine: BrowserEngine::Chromium,
+            path: script,
+        };
+
+        assert!(matches!(
+            browser.launch_cdp(&profile),
+            Err(BrowserError::BrowserExited)
+        ));
 
         let _ = fs::remove_dir_all(dir);
     }

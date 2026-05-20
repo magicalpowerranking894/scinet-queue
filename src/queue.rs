@@ -1,12 +1,13 @@
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const QUEUE_LOCK_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -247,7 +248,7 @@ pub(crate) fn default_queue_path() -> PathBuf {
 }
 
 pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
-    let trimmed = raw.trim();
+    let trimmed = raw.trim().trim_matches(['<', '>']);
     let lower = trimmed.to_ascii_lowercase();
     let doi = if lower.starts_with("doi:") {
         &trimmed[4..]
@@ -262,6 +263,7 @@ pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
     .split(['?', '#'])
     .next()
     .unwrap_or_default()
+    .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
     .to_ascii_lowercase();
 
     if doi.starts_with("10.")
@@ -287,7 +289,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
 
 #[derive(Debug)]
 struct QueueLock {
-    path: PathBuf,
+    file: File,
 }
 
 impl QueueLock {
@@ -297,22 +299,23 @@ impl QueueLock {
         }
 
         let start = Instant::now();
+        let token = lock_token();
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
 
         loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-            {
-                Ok(mut file) => {
-                    writeln!(file, "{}", std::process::id())?;
-                    file.sync_all()?;
+            match file.try_lock_exclusive() {
+                Ok(()) => {
+                    file.set_len(0)?;
+                    writeln!(file, "{token}")?;
 
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                    });
+                    return Ok(Self { file });
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if start.elapsed() >= timeout {
                         return Err(QueueError::QueueLocked(path.to_path_buf()));
                     }
@@ -327,8 +330,19 @@ impl QueueLock {
 
 impl Drop for QueueLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = FileExt::unlock(&self.file);
     }
+}
+
+fn lock_token() -> String {
+    format!("{}:{}", std::process::id(), unix_time_millis())
+}
+
+fn unix_time_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 fn unix_time() -> u64 {
@@ -363,6 +377,14 @@ mod tests {
         assert_eq!(
             normalize_doi("https://doi.org/10.1000/ABC?utm_source=x#frag").unwrap(),
             "10.1000/abc"
+        );
+        assert_eq!(
+            normalize_doi("doi:10.1093/rfs/hhaa075.").unwrap(),
+            "10.1093/rfs/hhaa075"
+        );
+        assert_eq!(
+            normalize_doi("<https://doi.org/10.1287/MNSC.2024.05040>").unwrap(),
+            "10.1287/mnsc.2024.05040"
         );
     }
 
@@ -445,6 +467,20 @@ mod tests {
         assert!(matches!(second, Err(QueueError::QueueLocked(_))));
 
         drop(lock);
+        assert!(QueueLock::acquire(&path, Duration::from_millis(1)).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn queue_lock_ignores_leftover_lock_file() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-lock-leftover-test-{}", std::process::id()));
+        let path = dir.join("queue.lock");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "99999999:1\n").unwrap();
+
         assert!(QueueLock::acquire(&path, Duration::from_millis(1)).is_ok());
 
         let _ = fs::remove_dir_all(dir);

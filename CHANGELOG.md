@@ -20,3 +20,5 @@
   public contribution safeguards.
 - Hardened CLI edge cases around argument validation, DOI normalization/import,
   failed browser startup cleanup, request failures, and forced local approval.
+- Hardened CDP startup retries, managed profile lock ownership, angle-wrapped
+  DOI cleanup, and queue locking under parallel CLI bursts.

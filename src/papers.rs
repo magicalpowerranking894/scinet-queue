@@ -141,6 +141,7 @@ mod tests {
 - doi:10.1093/rfs/hhaa075.
 - duplicate 10.1287/mnsc.2024.05040
 - query string https://doi.org/10.1000/ABC?utm_source=x
+- angle wrapped <https://doi.org/10.1145/3544548.3581400>
 "#;
 
         assert_eq!(
@@ -148,7 +149,8 @@ mod tests {
             vec![
                 "10.1287/mnsc.2024.05040".to_string(),
                 "10.1093/rfs/hhaa075".to_string(),
-                "10.1000/abc".to_string()
+                "10.1000/abc".to_string(),
+                "10.1145/3544548.3581400".to_string()
             ]
         );
     }
