@@ -30,7 +30,8 @@ pub(crate) fn owner_lock_file_can_be_reclaimed(path: &Path, stale_after: Duratio
 
 fn parse_lock_owner_pid(token: &str) -> Option<u32> {
     let (pid, _) = token.split_once(':')?;
-    pid.parse().ok()
+    let pid = pid.parse().ok()?;
+    (pid != 0).then_some(pid)
 }
 
 fn unix_time_millis() -> u128 {
@@ -42,6 +43,10 @@ fn unix_time_millis() -> u128 {
 
 #[cfg(unix)]
 fn process_is_running(pid: u32) -> bool {
+    if pid > i32::MAX as u32 {
+        return false;
+    }
+
     Command::new("kill")
         .arg("-0")
         .arg(pid.to_string())
@@ -107,7 +112,11 @@ mod tests {
         let path = dir.join("lock");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(&path, format!("{}:{}:0\n", u32::MAX, unix_time_millis())).unwrap();
+        fs::write(
+            &path,
+            format!("{}:{}:0\n", 99_999_999_u32, unix_time_millis()),
+        )
+        .unwrap();
 
         assert!(owner_lock_file_can_be_reclaimed(
             &path,
