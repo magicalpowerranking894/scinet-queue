@@ -1,9 +1,12 @@
+#[cfg(not(windows))]
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::{self, BufRead, Write};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -313,10 +316,11 @@ fn temp_path_for(path: &Path) -> PathBuf {
 
 #[derive(Debug)]
 struct QueueLock {
-    file: File,
+    _file: File,
 }
 
 impl QueueLock {
+    #[cfg(not(windows))]
     fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -338,7 +342,7 @@ impl QueueLock {
                     writeln!(file, "{token}")?;
                     file.sync_all()?;
 
-                    return Ok(Self { file });
+                    return Ok(Self { _file: file });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     if start.elapsed() >= timeout {
@@ -351,12 +355,55 @@ impl QueueLock {
             }
         }
     }
+
+    #[cfg(windows)]
+    fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let start = Instant::now();
+        let token = lock_token();
+
+        loop {
+            match fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(0)
+                .open(path)
+            {
+                Ok(mut file) => {
+                    file.set_len(0)?;
+                    writeln!(file, "{token}")?;
+                    file.sync_all()?;
+
+                    return Ok(Self { _file: file });
+                }
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    if start.elapsed() >= timeout {
+                        return Err(QueueError::QueueLocked(path.to_path_buf()));
+                    }
+
+                    thread::sleep(QUEUE_LOCK_POLL);
+                }
+                Err(error) => return Err(QueueError::Io(error)),
+            }
+        }
+    }
 }
 
+#[cfg(not(windows))]
 impl Drop for QueueLock {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        let _ = FileExt::unlock(&self._file);
     }
+}
+
+#[cfg(windows)]
+impl Drop for QueueLock {
+    fn drop(&mut self) {}
 }
 
 fn unix_time() -> u64 {

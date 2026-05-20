@@ -1,10 +1,13 @@
 use directories::ProjectDirs;
+#[cfg(not(windows))]
 use fs2::FileExt;
 use std::env;
 use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -328,7 +331,7 @@ fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Pa
 
 #[derive(Debug)]
 struct ProfileLock {
-    file: File,
+    _file: File,
 }
 
 impl ProfileLock {
@@ -336,6 +339,7 @@ impl ProfileLock {
         Self::acquire_with_timeout(profile_dir, PROFILE_LOCK_TIMEOUT)
     }
 
+    #[cfg(not(windows))]
     fn acquire_with_timeout(profile_dir: &Path, timeout: Duration) -> Result<Self, BrowserError> {
         let path = profile_dir.join(".snq-profile.lock");
         let token = lock_token();
@@ -364,14 +368,54 @@ impl ProfileLock {
         file.set_len(0)?;
         writeln!(file, "{token}")?;
         file.sync_all()?;
-        Ok(Self { file })
+        Ok(Self { _file: file })
+    }
+
+    #[cfg(windows)]
+    fn acquire_with_timeout(profile_dir: &Path, timeout: Duration) -> Result<Self, BrowserError> {
+        let path = profile_dir.join(".snq-profile.lock");
+        let token = lock_token();
+        let start = Instant::now();
+
+        loop {
+            match fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(0)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    file.set_len(0)?;
+                    writeln!(file, "{token}")?;
+                    file.sync_all()?;
+
+                    return Ok(Self { _file: file });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    if start.elapsed() >= timeout {
+                        return Err(BrowserError::ProfileLocked(path));
+                    }
+
+                    thread::sleep(PROFILE_LOCK_POLL);
+                }
+                Err(error) => return Err(BrowserError::Io(error)),
+            }
+        }
     }
 }
 
+#[cfg(not(windows))]
 impl Drop for ProfileLock {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        let _ = FileExt::unlock(&self._file);
     }
+}
+
+#[cfg(windows)]
+impl Drop for ProfileLock {
+    fn drop(&mut self) {}
 }
 
 #[cfg(target_os = "macos")]
