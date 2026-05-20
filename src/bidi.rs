@@ -115,6 +115,11 @@ impl BidiConnection {
         self.wait_for_ready_state()
     }
 
+    pub(crate) fn close_browser(&mut self) -> Result<(), BidiError> {
+        self.call("browser.close", json!({}))?;
+        Ok(())
+    }
+
     pub(crate) fn evaluate_json(&mut self, expression: &str) -> Result<Value, BidiError> {
         let wrapped = format!("(async () => JSON.stringify(await ({expression})))()");
         let response = self.call(
@@ -272,6 +277,21 @@ mod tests {
         assert!(matches!(error, BidiError::ReadyStateTimeout));
     }
 
+    #[test]
+    fn bidi_connection_can_close_browser() {
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let port = start_fake_bidi_server(methods.clone(), FakeBidiMode::Ok);
+        let mut connection =
+            BidiConnection::connect_with_timeout(port, Duration::from_secs(2)).unwrap();
+
+        connection.close_browser().unwrap();
+
+        assert_eq!(
+            *methods.lock().unwrap(),
+            vec!["session.new", "browsingContext.create", "browser.close"]
+        );
+    }
+
     #[derive(Clone, Copy)]
     enum FakeBidiMode {
         Ok,
@@ -382,6 +402,17 @@ mod tests {
                                         "value": value
                                     }
                                 }
+                            }),
+                        );
+                    }
+                    "browser.close" => {
+                        methods.lock().unwrap().push("browser.close");
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "id": id,
+                                "type": "success",
+                                "result": {}
                             }),
                         );
                     }

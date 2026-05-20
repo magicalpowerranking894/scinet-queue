@@ -462,5 +462,9 @@ mod tests {
                 }))
             }
         }
+
+        fn close_browser(&mut self) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
     }
 }

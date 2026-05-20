@@ -8,6 +8,7 @@ use crate::cdp::{CdpConnection, CdpError, page_target};
 pub(crate) trait PageSession {
     fn navigate(&mut self, url: &str) -> Result<(), PageError>;
     fn evaluate_json(&mut self, expression: &str) -> Result<Value, PageError>;
+    fn close_browser(&mut self) -> Result<(), PageError>;
 }
 
 pub(crate) struct CdpPageSession {
@@ -60,6 +61,10 @@ impl PageSession for CdpPageSession {
             .evaluate_json(expression)
             .map_err(PageError::Cdp)
     }
+
+    fn close_browser(&mut self) -> Result<(), PageError> {
+        self.connection.close_browser().map_err(PageError::Cdp)
+    }
 }
 
 impl PageSession for BidiPageSession {
@@ -71,6 +76,10 @@ impl PageSession for BidiPageSession {
         self.connection
             .evaluate_json(expression)
             .map_err(PageError::Bidi)
+    }
+
+    fn close_browser(&mut self) -> Result<(), PageError> {
+        self.connection.close_browser().map_err(PageError::Bidi)
     }
 }
 
@@ -86,6 +95,13 @@ impl PageSession for BrowserPageSession {
         match self {
             BrowserPageSession::Cdp(session) => session.evaluate_json(expression),
             BrowserPageSession::Bidi(session) => session.evaluate_json(expression),
+        }
+    }
+
+    fn close_browser(&mut self) -> Result<(), PageError> {
+        match self {
+            BrowserPageSession::Cdp(session) => session.close_browser(),
+            BrowserPageSession::Bidi(session) => session.close_browser(),
         }
     }
 }

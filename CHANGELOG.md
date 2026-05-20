@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Closed waited `snq login` browser sessions gracefully after login detection so
+  fresh authentication state can be reused by later headless commands.
 - Surfaced Sci-Net request error reasons when response bodies include them.
 - Documented quoting DOI arguments that contain shell metacharacters such as
   parentheses.

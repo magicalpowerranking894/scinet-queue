@@ -133,7 +133,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
 
             if login.wait {
-                let session_browser = browser
+                let mut session_browser = browser
                     .launch_session(&profile_dir, false)
                     .map_err(|error| error.to_string())?;
 
@@ -143,6 +143,16 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 
                 wait_for_login(browser.engine, session_browser.port())?;
                 println!("login detected");
+
+                if !session_browser
+                    .wait_for_exit(Duration::from_secs(10))
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err(
+                        "login: browser did not close cleanly after login detection; close the opened browser and run `snq session`"
+                            .to_string(),
+                    );
+                }
             } else {
                 let pid = browser
                     .launch_login(&profile_dir)
@@ -687,6 +697,7 @@ fn wait_for_login(engine: crate::browser::BrowserEngine, port: u16) -> Result<()
         let probe = probe_current_session(&mut page).map_err(|error| error.to_string())?;
 
         if probe.is_logged_in() {
+            let _ = page.close_browser();
             return Ok(());
         }
 

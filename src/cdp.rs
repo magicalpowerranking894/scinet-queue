@@ -119,6 +119,11 @@ impl CdpConnection {
         self.wait_for_ready_state()
     }
 
+    pub(crate) fn close_browser(&mut self) -> Result<(), CdpError> {
+        self.call("Browser.close", json!({}))?;
+        Ok(())
+    }
+
     fn wait_for_ready_state(&mut self) -> Result<(), CdpError> {
         self.wait_for_ready_state_with(READY_STATE_ATTEMPTS, READY_STATE_POLL)
     }
@@ -221,6 +226,14 @@ mod tests {
             .unwrap();
 
         assert!(matches!(error, CdpError::ReadyStateTimeout));
+    }
+
+    #[test]
+    fn cdp_connection_can_close_browser() {
+        let port = start_fake_cdp_server(FakeCdpMode::LoadingReadyState);
+        let mut connection = connect_fake_cdp(port);
+
+        connection.close_browser().unwrap();
     }
 
     #[derive(Clone, Copy)]

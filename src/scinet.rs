@@ -654,6 +654,10 @@ mod tests {
 
             Ok(self.values.remove(0))
         }
+
+        fn close_browser(&mut self) -> Result<(), PageError> {
+            Ok(())
+        }
     }
 
     #[test]

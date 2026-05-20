@@ -226,6 +226,13 @@ impl ManagedBrowser {
             ManagedBrowser::Bidi(browser) => browser.port(),
         }
     }
+
+    pub(crate) fn wait_for_exit(&mut self, timeout: Duration) -> Result<bool, BrowserError> {
+        match self {
+            ManagedBrowser::Cdp(browser) => browser.wait_for_exit(timeout),
+            ManagedBrowser::Bidi(browser) => browser.wait_for_exit(timeout),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -238,6 +245,10 @@ pub(crate) struct CdpBrowser {
 impl CdpBrowser {
     pub(crate) fn port(&self) -> u16 {
         self.port
+    }
+
+    fn wait_for_exit(&mut self, timeout: Duration) -> Result<bool, BrowserError> {
+        wait_for_child_exit(&mut self.child, timeout)
     }
 }
 
@@ -258,6 +269,26 @@ pub(crate) struct BidiBrowser {
 impl BidiBrowser {
     pub(crate) fn port(&self) -> u16 {
         self.port
+    }
+
+    fn wait_for_exit(&mut self, timeout: Duration) -> Result<bool, BrowserError> {
+        wait_for_child_exit(&mut self.child, timeout)
+    }
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool, BrowserError> {
+    let start = Instant::now();
+
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(true);
+        }
+
+        if start.elapsed() >= timeout {
+            return Ok(false);
+        }
+
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
