@@ -7,7 +7,7 @@ The binary is `snq`.
 
 ## Status
 
-Early development. The local queue is the first supported surface.
+Early development. The local queue and Chromium session probe are supported.
 
 ## Install
 
@@ -18,6 +18,8 @@ cargo install --path .
 ## Usage
 
 ```sh
+snq login
+snq session
 snq add 10.1287/mnsc.2024.05040
 snq list
 snq remove 10.1287/mnsc.2024.05040
@@ -38,7 +40,7 @@ snq remove 10.1287/mnsc.2024.05040
 
 ## Browser Session
 
-`snq login` uses a tool-owned browser profile:
+`snq login` opens a tool-owned browser profile:
 
 ```sh
 snq login
@@ -47,15 +49,15 @@ snq login
 The user logs into Sci-Net once. Later commands reuse that profile without
 taking over the user's normal browser.
 
+`snq session` starts the managed profile headlessly and checks whether Sci-Net
+loads with a logged-in session.
+
 This avoids decrypting cookies from Chrome, Firefox, Edge, Brave, Zen, or the
 operating system keychain. Importing an existing browser profile is outside the
 default flow.
 
-Browser support is planned in this order:
-
-1. Chromium-compatible browser with Chrome DevTools Protocol.
-2. Firefox-compatible browser through WebDriver BiDi.
-3. Manual session export, if direct browser control is unavailable.
+Chromium-compatible browsers are supported first through Chrome DevTools
+Protocol. Firefox support is planned through WebDriver BiDi.
 
 Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 

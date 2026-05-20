@@ -3,10 +3,12 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
-const LOGIN_URL: &str = "https://sci-net.xyz/";
+pub const SCINET_URL: &str = "https://sci-net.xyz/";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Browser {
@@ -26,15 +28,62 @@ impl Browser {
                     .arg(format!("--user-data-dir={}", profile_dir.display()))
                     .arg("--no-first-run")
                     .arg("--no-default-browser-check")
-                    .arg(LOGIN_URL);
+                    .arg(SCINET_URL);
             }
             BrowserEngine::Firefox => {
-                command.arg("--profile").arg(profile_dir).arg(LOGIN_URL);
+                command.arg("--profile").arg(profile_dir).arg(SCINET_URL);
             }
         }
 
         let child = command.spawn()?;
         Ok(child.id())
+    }
+
+    pub fn launch_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
+        if self.engine != BrowserEngine::Chromium {
+            return Err(BrowserError::UnsupportedCdpEngine(self.engine));
+        }
+
+        fs::create_dir_all(profile_dir)?;
+        let active_port_path = profile_dir.join("DevToolsActivePort");
+        let _ = fs::remove_file(&active_port_path);
+
+        let child = Command::new(&self.path)
+            .arg(format!("--user-data-dir={}", profile_dir.display()))
+            .arg("--remote-debugging-port=0")
+            .arg("--remote-debugging-address=127.0.0.1")
+            .arg("--headless=new")
+            .arg("--disable-gpu")
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg(SCINET_URL)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        let port = wait_for_devtools_port(&active_port_path, Duration::from_secs(10))?;
+
+        Ok(CdpBrowser { child, port })
+    }
+}
+
+#[derive(Debug)]
+pub struct CdpBrowser {
+    child: Child,
+    port: u16,
+}
+
+impl CdpBrowser {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for CdpBrowser {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -68,6 +117,9 @@ pub enum BrowserError {
     NoProjectDirs,
     NoBrowserFound,
     EnvBrowserNotFound(PathBuf),
+    UnsupportedCdpEngine(BrowserEngine),
+    DevtoolsPortTimeout(PathBuf),
+    InvalidDevtoolsPort { path: PathBuf, value: String },
 }
 
 impl fmt::Display for BrowserError {
@@ -81,6 +133,18 @@ impl fmt::Display for BrowserError {
             ),
             BrowserError::EnvBrowserNotFound(path) => {
                 write!(f, "{BROWSER_ENV} does not exist: {}", path.display())
+            }
+            BrowserError::UnsupportedCdpEngine(engine) => {
+                write!(
+                    f,
+                    "CDP session probe is not supported for {engine} browsers yet"
+                )
+            }
+            BrowserError::DevtoolsPortTimeout(path) => {
+                write!(f, "timed out waiting for {}", path.display())
+            }
+            BrowserError::InvalidDevtoolsPort { path, value } => {
+                write!(f, "invalid devtools port in {}: {value}", path.display())
             }
         }
     }
@@ -163,6 +227,31 @@ fn find_in_path(command: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+fn wait_for_devtools_port(path: &Path, timeout: Duration) -> Result<u16, BrowserError> {
+    let start = Instant::now();
+
+    while start.elapsed() < timeout {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if let Some(port) = parse_devtools_port(&contents) {
+                return Ok(port);
+            }
+
+            return Err(BrowserError::InvalidDevtoolsPort {
+                path: path.to_path_buf(),
+                value: contents.lines().next().unwrap_or_default().to_string(),
+            });
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    Err(BrowserError::DevtoolsPortTimeout(path.to_path_buf()))
+}
+
+fn parse_devtools_port(contents: &str) -> Option<u16> {
+    contents.lines().next()?.trim().parse().ok()
 }
 
 fn browser_candidates() -> Vec<Browser> {
@@ -300,5 +389,14 @@ mod tests {
         };
 
         assert!(resolve_browser(browser).is_none());
+    }
+
+    #[test]
+    fn parses_devtools_active_port() {
+        assert_eq!(
+            parse_devtools_port("9333\n/devtools/browser/abc\n"),
+            Some(9333)
+        );
+        assert_eq!(parse_devtools_port("nope\n/devtools/browser/abc\n"), None);
     }
 }

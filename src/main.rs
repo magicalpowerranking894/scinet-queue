@@ -1,10 +1,12 @@
 mod browser;
+mod cdp;
 mod queue;
 
 use std::env;
 use std::process;
 
-use browser::{detect_browser, profile_dir};
+use browser::{SCINET_URL, detect_browser, profile_dir};
+use cdp::probe_session;
 use queue::{AddResult, Queue, RemoveResult, default_queue_path};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -71,11 +73,26 @@ fn run() -> Result<(), String> {
         Some("session") => {
             let browser = detect_browser().map_err(|error| error.to_string())?;
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+            let cdp_browser = browser
+                .launch_cdp(&profile_dir)
+                .map_err(|error| error.to_string())?;
+            let probe =
+                probe_session(cdp_browser.port(), SCINET_URL).map_err(|error| error.to_string())?;
 
             println!("browser {}", browser.path.display());
             println!("engine {}", browser.engine);
             println!("profile {}", profile_dir.display());
             println!("queue {}", default_queue_path().display());
+            println!("url {}", probe.url);
+            println!("title {}", probe.title);
+            println!(
+                "login {}",
+                if probe.is_logged_in() {
+                    "detected"
+                } else {
+                    "not detected"
+                }
+            );
         }
         Some("check" | "request" | "watch" | "fetch" | "approve") => {
             return Err("command is scaffolded but not implemented yet".to_string());
