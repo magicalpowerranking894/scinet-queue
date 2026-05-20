@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 - 2026-05-20
 
 - Added a workspace-local DOI queue.
 - Added managed Chromium login and headless Sci-Net session reuse.
@@ -14,3 +14,5 @@
   workflows.
 - Added Sci-Net HTML fixtures for logged-out, pending, working, and solved
   request states.
+- Added public-release documentation, security reporting guidance, and GitHub
+  issue templates.

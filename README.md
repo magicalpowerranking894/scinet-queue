@@ -1,5 +1,7 @@
 # scinet-queue
 
+[![ci](https://github.com/tivris/scinet-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/tivris/scinet-queue/actions/workflows/ci.yml)
+
 `scinet-queue` is a small command-line tool for managing Sci-Net paper
 requests.
 
@@ -15,7 +17,25 @@ Authenticated commands currently require a Chromium-compatible browser with
 Chrome DevTools Protocol support. macOS, Linux, and Windows builds are checked
 in CI. Firefox and Zen support is planned, but not implemented.
 
+| Area | Status |
+| --- | --- |
+| macOS | CI checked |
+| Linux | CI checked |
+| Windows | CI checked |
+| Chrome, Chromium, Brave, Edge | Supported for authenticated commands |
+| Firefox, Zen | Planned |
+| Existing browser cookie import | Not supported |
+| Automatic token approval | Not supported |
+
 ## Install
+
+From GitHub:
+
+```sh
+cargo install --git https://github.com/tivris/scinet-queue
+```
+
+From a local checkout:
 
 ```sh
 cargo install --path .
@@ -46,6 +66,29 @@ snq approve 10.1287/mnsc.2024.05040
 snq approve 10.1287/mnsc.2024.05040 --force
 snq doctor
 snq doctor --json
+```
+
+Agent-facing JSON:
+
+```sh
+$ snq list --json
+[
+  {
+    "doi": "10.1287/mnsc.2024.05040",
+    "status": "working",
+    "created_at": 1779283748,
+    "updated_at": 1779285046
+  }
+]
+
+$ snq watch --json
+[
+  {
+    "doi": "10.1287/mnsc.2024.05040",
+    "status": "working",
+    "remote_state": "pdf"
+  }
+]
 ```
 
 `snq add` accepts one or more DOIs. `snq import <path>` extracts DOIs from a
@@ -128,6 +171,18 @@ Protocol. Firefox support is planned through WebDriver BiDi.
 
 Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 
+## Known Limitations
+
+- Authenticated commands use Chrome DevTools Protocol and currently require a
+  Chromium-compatible browser.
+- Firefox and Zen are detected for login profile setup, but headless session
+  automation is not implemented yet.
+- Sci-Net is a third-party website. UI or endpoint changes can break request
+  detection, PDF detection, or download behavior.
+- `snq approve` is local review state only. It does not automatically release
+  tokens or submit approval actions on Sci-Net.
+- `snq` does not import cookies from an existing personal browser profile.
+
 ## Responsible Use
 
 `scinet-queue` is an independent tool for automating a user's own Sci-Net
@@ -152,3 +207,5 @@ state/
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Observed Sci-Net behavior is documented in [docs/behavior.md](docs/behavior.md).
