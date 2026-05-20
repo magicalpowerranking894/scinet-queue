@@ -1,7 +1,10 @@
+#[cfg(not(windows))]
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(not(windows))]
+use std::fs::File;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -289,6 +292,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
 
 #[derive(Debug)]
 struct QueueLock {
+    #[cfg(not(windows))]
     file: File,
     #[cfg(windows)]
     path: PathBuf,
