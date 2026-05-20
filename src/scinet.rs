@@ -90,7 +90,6 @@ impl SessionProbe {
         text.contains("logout")
             || text.contains("my requests")
             || text.contains("my library")
-            || text.contains("user")
             || (text.contains("tokens") && text.contains("request"))
     }
 }
@@ -310,7 +309,7 @@ mod tests {
         let probe = SessionProbe {
             title: "Sci-Net".to_string(),
             url: "https://sci-net.xyz/".to_string(),
-            text: "user tokens library".to_string(),
+            text: "tokens request library".to_string(),
         };
 
         assert!(probe.is_logged_in());

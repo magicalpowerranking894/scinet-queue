@@ -1,16 +1,20 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
+use std::io;
 use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket, connect};
 
+const CDP_IO_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Debug)]
 pub(crate) enum CdpError {
     Base64(base64::DecodeError),
     Http(ureq::Error),
+    Io(io::Error),
     Json(serde_json::Error),
     WebSocket(tungstenite::Error),
     NoPageTarget,
@@ -22,6 +26,7 @@ impl fmt::Display for CdpError {
         match self {
             CdpError::Http(error) => write!(f, "{error}"),
             CdpError::Base64(error) => write!(f, "{error}"),
+            CdpError::Io(error) => write!(f, "{error}"),
             CdpError::Json(error) => write!(f, "{error}"),
             CdpError::WebSocket(error) => write!(f, "{error}"),
             CdpError::NoPageTarget => write!(f, "could not find a CDP page target"),
@@ -39,6 +44,12 @@ impl From<base64::DecodeError> for CdpError {
 impl From<ureq::Error> for CdpError {
     fn from(error: ureq::Error) -> Self {
         CdpError::Http(error)
+    }
+}
+
+impl From<io::Error> for CdpError {
+    fn from(error: io::Error) -> Self {
+        CdpError::Io(error)
     }
 }
 
@@ -72,7 +83,8 @@ pub(crate) struct CdpConnection {
 
 impl CdpConnection {
     pub(crate) fn connect(ws_url: &str) -> Result<Self, CdpError> {
-        let (socket, _) = connect(ws_url)?;
+        let (mut socket, _) = connect(ws_url)?;
+        set_socket_timeout(&mut socket)?;
 
         Ok(Self { socket, next_id: 1 })
     }
@@ -143,6 +155,15 @@ impl CdpConnection {
                 .ok_or(CdpError::UnexpectedResponse(response));
         }
     }
+}
+
+fn set_socket_timeout(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), CdpError> {
+    if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
+        stream.set_read_timeout(Some(CDP_IO_TIMEOUT))?;
+        stream.set_write_timeout(Some(CDP_IO_TIMEOUT))?;
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

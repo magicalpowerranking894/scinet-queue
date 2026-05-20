@@ -2,7 +2,7 @@
 name: Security contact
 about: Request a private channel for a security-sensitive report
 title: "security: private report needed"
-labels: ""
+labels: security
 assignees: ""
 ---
 

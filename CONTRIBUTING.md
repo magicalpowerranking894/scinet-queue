@@ -9,6 +9,7 @@ review.
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked
+cargo package --locked
 ```
 
 ## Pull Requests

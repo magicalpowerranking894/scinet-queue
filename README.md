@@ -187,9 +187,10 @@ Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 
 `scinet-queue` is an independent tool for automating a user's own Sci-Net
 session for lawful educational and research workflows. It is not affiliated
-with Sci-Net, third-party paper index, or any publisher. It does not bypass authentication,
-paywalls, or access controls. Use it only where you have the right to request,
-download, and store the papers involved.
+with Sci-Net, any third-party paper index, repository, or publisher. It does
+not bypass authentication, paywalls, access controls, or usage terms. Use it
+only where you have the right to request, download, and store the papers
+involved.
 
 ## Storage
 
@@ -199,9 +200,10 @@ lives under the user's platform state directory.
 The queue is plain and inspectable:
 
 ```text
-queue.jsonl
+.snq/
+  queue.jsonl
+  queue.lock
 papers/
-state/
 ```
 
 ## Contributing

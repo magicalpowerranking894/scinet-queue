@@ -3,7 +3,11 @@ use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const QUEUE_LOCK_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct QueueEntry {
@@ -60,6 +64,7 @@ impl Queue {
 
     pub(crate) fn add(&self, raw_doi: &str) -> Result<AddResult, QueueError> {
         let doi = normalize_doi(raw_doi)?;
+        let _lock = self.lock()?;
         let mut entries = self.read()?;
 
         if entries.iter().any(|entry| entry.doi == doi) {
@@ -78,6 +83,7 @@ impl Queue {
 
     pub(crate) fn remove(&self, raw_doi: &str) -> Result<RemoveResult, QueueError> {
         let doi = normalize_doi(raw_doi)?;
+        let _lock = self.lock()?;
         let mut entries = self.read()?;
         let before = entries.len();
 
@@ -97,6 +103,7 @@ impl Queue {
         status: QueueStatus,
     ) -> Result<StatusResult, QueueError> {
         let doi = normalize_doi(raw_doi)?;
+        let _lock = self.lock()?;
         let mut entries = self.read()?;
 
         if let Some(entry) = entries.iter_mut().find(|entry| entry.doi == doi) {
@@ -108,6 +115,17 @@ impl Queue {
         }
 
         Ok(StatusResult::NotFound(doi))
+    }
+
+    fn lock(&self) -> Result<QueueLock, QueueError> {
+        QueueLock::acquire(&self.lock_path(), QUEUE_LOCK_TIMEOUT)
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("queue.lock")
     }
 
     fn read(&self) -> Result<Vec<QueueEntry>, QueueError> {
@@ -185,6 +203,7 @@ pub(crate) enum QueueError {
         source: serde_json::Error,
     },
     InvalidDoi(String),
+    QueueLocked(PathBuf),
 }
 
 impl fmt::Display for QueueError {
@@ -202,6 +221,11 @@ impl fmt::Display for QueueError {
                 )
             }
             QueueError::InvalidDoi(doi) => write!(f, "invalid DOI `{doi}`"),
+            QueueError::QueueLocked(path) => write!(
+                f,
+                "queue is already in use: {}; wait for the other snq command to finish",
+                path.display()
+            ),
         }
     }
 }
@@ -251,6 +275,52 @@ fn temp_path_for(path: &Path) -> PathBuf {
         .unwrap_or("queue.jsonl");
 
     path.with_file_name(format!(".{file_name}.{pid}.tmp"))
+}
+
+#[derive(Debug)]
+struct QueueLock {
+    path: PathBuf,
+}
+
+impl QueueLock {
+    fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let start = Instant::now();
+
+        loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(mut file) => {
+                    writeln!(file, "{}", std::process::id())?;
+                    file.sync_all()?;
+
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if start.elapsed() >= timeout {
+                        return Err(QueueError::QueueLocked(path.to_path_buf()));
+                    }
+
+                    thread::sleep(QUEUE_LOCK_POLL);
+                }
+                Err(error) => return Err(QueueError::Io(error)),
+            }
+        }
+    }
+}
+
+impl Drop for QueueLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn unix_time() -> u64 {
@@ -339,6 +409,23 @@ mod tests {
         );
         assert_eq!(entries[0].status, QueueStatus::Requested);
         assert!(entries[0].updated_at >= entries[0].created_at);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn queue_lock_rejects_concurrent_acquire() {
+        let dir = std::env::temp_dir().join(format!("snq-lock-test-{}", std::process::id()));
+        let path = dir.join("queue.lock");
+        let _ = fs::remove_dir_all(&dir);
+
+        let lock = QueueLock::acquire(&path, Duration::from_millis(1)).unwrap();
+        let second = QueueLock::acquire(&path, Duration::from_millis(1));
+
+        assert!(matches!(second, Err(QueueError::QueueLocked(_))));
+
+        drop(lock);
+        assert!(QueueLock::acquire(&path, Duration::from_millis(1)).is_ok());
 
         let _ = fs::remove_dir_all(dir);
     }

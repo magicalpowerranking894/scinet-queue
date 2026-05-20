@@ -2,9 +2,13 @@
 name = "scinet-queue"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "A tiny agent-friendly DOI queue for Sci-Net."
+readme = "README.md"
 license = "MIT"
 repository = "https://github.com/tivris/scinet-queue"
+keywords = ["cli", "doi", "research", "sci-net"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "snq"

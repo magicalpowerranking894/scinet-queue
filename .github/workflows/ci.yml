@@ -10,16 +10,25 @@ permissions:
 
 jobs:
   rust:
-    name: rust (${{ matrix.os }})
+    name: rust (${{ matrix.os }}, ${{ matrix.toolchain }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: stable
+          - os: ubuntu-latest
+            toolchain: 1.85.0
     steps:
       - uses: actions/checkout@v6
-      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
-      - run: rustup default stable
+      - run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy,rustfmt
+      - run: rustup default ${{ matrix.toolchain }}
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --locked
+      - run: cargo package --locked

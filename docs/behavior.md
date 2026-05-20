@@ -11,7 +11,7 @@ Sci-Net response as JSON.
 Observed outcomes:
 
 - Sci-Net may expose an open-access option.
-- Sci-Net may expose an existing PDF or third-party paper index-backed option.
+- Sci-Net may expose an existing availability option.
 - Sci-Net may allow a token-backed request when no paper is available.
 
 ## Requests

@@ -213,8 +213,8 @@ pub(crate) fn detect_browser() -> Result<Browser, BrowserError> {
 }
 
 pub(crate) fn profile_dir(engine: BrowserEngine) -> Result<PathBuf, BrowserError> {
-    let dirs =
-        ProjectDirs::from("com", "tivris", "scinet-queue").ok_or(BrowserError::NoProjectDirs)?;
+    let dirs = ProjectDirs::from("io.github", "tivris", "scinet-queue")
+        .ok_or(BrowserError::NoProjectDirs)?;
     let state_dir = dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir());
 
     Ok(state_dir.join("browser").join(engine.profile_name()))

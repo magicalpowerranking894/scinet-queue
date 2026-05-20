@@ -16,3 +16,5 @@
   request states.
 - Added public-release documentation, security reporting guidance, and GitHub
   issue templates.
+- Added queue locking, bounded CDP socket timeouts, package metadata, and
+  public contribution safeguards.
