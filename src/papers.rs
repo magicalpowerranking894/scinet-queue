@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use crate::page::PageSession;
 use crate::queue::{Queue, QueueStatus, StatusResult, normalize_doi};
 use crate::scinet::{SCINET_URL, download_pdf, view_request};
 
@@ -99,11 +100,11 @@ pub(crate) fn fetch_dois(queue: &Queue, doi: Option<&str>) -> Result<Vec<String>
 
 pub(crate) fn fetch_one(
     queue: &Queue,
-    port: u16,
+    page: &mut impl PageSession,
     doi: &str,
     out_dir: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    let view = view_request(port, SCINET_URL, doi).map_err(|error| error.to_string())?;
+    let view = view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
 
     if view.looks_logged_out() {
         return Err("not logged into Sci-Net; run `snq login` first".to_string());
@@ -112,7 +113,7 @@ pub(crate) fn fetch_one(
     let Some(pdf_url) = view.pdf_urls.first() else {
         return Ok(None);
     };
-    let download = download_pdf(port, pdf_url).map_err(|error| error.to_string())?;
+    let download = download_pdf(page, pdf_url).map_err(|error| error.to_string())?;
 
     validate_pdf(&download.bytes)?;
 

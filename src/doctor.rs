@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::browser::{BrowserEngine, detect_browser, profile_dir};
+use crate::page::CdpPageSession;
 use crate::queue::{Queue, default_queue_path};
 use crate::scinet::{SCINET_URL, probe_session};
 
@@ -113,22 +114,31 @@ pub(crate) fn doctor_report(queue: &Queue) -> DoctorReport {
                     )
                 } else {
                     let session_info = match browser.launch_cdp(&path) {
-                        Ok(cdp_browser) => match probe_session(cdp_browser.port(), SCINET_URL) {
-                            Ok(probe) => {
-                                let logged_in = probe.is_logged_in();
+                        Ok(cdp_browser) => match CdpPageSession::connect(cdp_browser.port()) {
+                            Ok(mut page) => match probe_session(&mut page, SCINET_URL) {
+                                Ok(probe) => {
+                                    let logged_in = probe.is_logged_in();
 
-                                DoctorSession {
-                                    ok: logged_in,
-                                    logged_in: Some(logged_in),
-                                    url: Some(probe.url),
-                                    title: Some(probe.title),
-                                    message: if logged_in {
-                                        "logged in".to_string()
-                                    } else {
-                                        "not logged in; run `snq login`".to_string()
-                                    },
+                                    DoctorSession {
+                                        ok: logged_in,
+                                        logged_in: Some(logged_in),
+                                        url: Some(probe.url),
+                                        title: Some(probe.title),
+                                        message: if logged_in {
+                                            "logged in".to_string()
+                                        } else {
+                                            "not logged in; run `snq login`".to_string()
+                                        },
+                                    }
                                 }
-                            }
+                                Err(error) => DoctorSession {
+                                    ok: false,
+                                    logged_in: None,
+                                    url: None,
+                                    title: None,
+                                    message: error.to_string(),
+                                },
+                            },
                             Err(error) => DoctorSession {
                                 ok: false,
                                 logged_in: None,

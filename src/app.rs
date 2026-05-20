@@ -6,12 +6,12 @@ use crate::args::{
     parse_view,
 };
 use crate::browser::{detect_browser, profile_dir};
-use crate::cdp;
 use crate::doctor::{doctor_report, print_doctor_report};
 use crate::output::{
     RequestOutput, SessionOutput, ViewOutput, WatchOutput, compact_text, format_response,
     print_help, print_json,
 };
+use crate::page::{CdpPageSession, PageError};
 use crate::papers::{extract_dois, fetch_dois, fetch_one, read_import_text};
 use crate::queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
@@ -148,8 +148,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let cdp_browser = browser
                 .launch_cdp(&profile_dir)
                 .map_err(|error| error.to_string())?;
-            let probe =
-                probe_session(cdp_browser.port(), SCINET_URL).map_err(|error| error.to_string())?;
+            let mut page =
+                CdpPageSession::connect(cdp_browser.port()).map_err(|error| error.to_string())?;
+            let probe = probe_session(&mut page, SCINET_URL).map_err(|error| error.to_string())?;
             let logged_in = probe.is_logged_in();
 
             let output = SessionOutput {
@@ -204,7 +205,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let Some(doi) = doi else {
                 return Err("check: missing DOI".to_string());
             };
-            let response = with_scinet_session(|port| search_doi(port, SCINET_URL, &doi))?;
+            let response = with_scinet_session(|page| search_doi(page, SCINET_URL, &doi))?;
             let json = format_response(&response)?;
 
             println!("{json}");
@@ -223,11 +224,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
 
-            let responses = with_scinet_port(|port| {
+            let responses = with_scinet_page(|page| {
                 let mut responses = Vec::new();
 
                 for doi in &dois {
-                    let response = request_doi(port, SCINET_URL, doi, request.reward)
+                    let response = request_doi(page, SCINET_URL, doi, request.reward)
                         .map_err(|error| error.to_string())?;
 
                     if response.looks_logged_out() {
@@ -344,12 +345,12 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
 
-            let outputs = with_scinet_port(|port| {
+            let outputs = with_scinet_page(|page| {
                 loop {
                     let mut outputs = Vec::new();
 
                     for doi in &dois {
-                        match fetch_one(&queue, port, doi, &fetch.out_dir) {
+                        match fetch_one(&queue, page, doi, &fetch.out_dir) {
                             Ok(Some(path)) => outputs.push(path),
                             Ok(None) => {}
                             Err(error) => return Err(error),
@@ -407,10 +408,10 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 
 fn with_scinet_session<F>(operation: F) -> Result<ScinetResponse, String>
 where
-    F: FnOnce(u16) -> Result<ScinetResponse, cdp::CdpError>,
+    F: FnOnce(&mut CdpPageSession) -> Result<ScinetResponse, PageError>,
 {
-    with_scinet_port(|port| {
-        let response = operation(port).map_err(|error| error.to_string())?;
+    with_scinet_page(|page| {
+        let response = operation(page).map_err(|error| error.to_string())?;
 
         if response.looks_logged_out() {
             return Err("not logged into Sci-Net; run `snq login` first".to_string());
@@ -420,30 +421,32 @@ where
     })
 }
 
-fn with_scinet_port<F, T>(operation: F) -> Result<T, String>
+fn with_scinet_page<F, T>(operation: F) -> Result<T, String>
 where
-    F: FnOnce(u16) -> Result<T, String>,
+    F: FnOnce(&mut CdpPageSession) -> Result<T, String>,
 {
     let browser = detect_browser().map_err(|error| error.to_string())?;
     let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
     let cdp_browser = browser
         .launch_cdp(&profile_dir)
         .map_err(|error| error.to_string())?;
-    let probe = probe_session(cdp_browser.port(), SCINET_URL).map_err(|error| error.to_string())?;
+    let mut page =
+        CdpPageSession::connect(cdp_browser.port()).map_err(|error| error.to_string())?;
+    let probe = probe_session(&mut page, SCINET_URL).map_err(|error| error.to_string())?;
 
     if !probe.is_logged_in() {
         return Err("not logged into Sci-Net; run `snq login` first".to_string());
     }
 
-    operation(cdp_browser.port())
+    operation(&mut page)
 }
 
 fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<RequestView>, String> {
-    with_scinet_port(|port| {
+    with_scinet_page(|page| {
         let mut views = Vec::new();
 
         for doi in dois {
-            views.push(view_request(port, SCINET_URL, doi).map_err(|error| error.to_string())?);
+            views.push(view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?);
         }
 
         Ok(views)
@@ -451,8 +454,10 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
 }
 
 fn wait_for_login(port: u16) -> Result<(), String> {
+    let mut page = CdpPageSession::connect(port).map_err(|error| error.to_string())?;
+
     loop {
-        let probe = probe_current_session(port).map_err(|error| error.to_string())?;
+        let probe = probe_current_session(&mut page).map_err(|error| error.to_string())?;
 
         if probe.is_logged_in() {
             return Ok(());

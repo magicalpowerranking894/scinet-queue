@@ -5,6 +5,7 @@ mod cdp;
 mod doctor;
 mod locks;
 mod output;
+mod page;
 mod papers;
 mod queue;
 mod scinet;

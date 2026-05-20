@@ -3,7 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::cdp::{CdpConnection, CdpError, page_target};
+use crate::page::{PageError, PageSession};
 
 pub(crate) const SCINET_URL: &str = "https://sci-net.xyz/";
 
@@ -159,56 +159,61 @@ impl RequestRemoteState {
     }
 }
 
-pub(crate) fn probe_session(port: u16, url: &str) -> Result<SessionProbe, CdpError> {
-    let target = page_target(port)?;
-    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
-
-    cdp.navigate(url)?;
-    read_session(&mut cdp)
+pub(crate) fn probe_session(
+    page: &mut impl PageSession,
+    url: &str,
+) -> Result<SessionProbe, PageError> {
+    page.navigate(url)?;
+    read_session(page)
 }
 
-pub(crate) fn probe_current_session(port: u16) -> Result<SessionProbe, CdpError> {
-    let target = page_target(port)?;
-    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
-
-    read_session(&mut cdp)
+pub(crate) fn probe_current_session(
+    page: &mut impl PageSession,
+) -> Result<SessionProbe, PageError> {
+    read_session(page)
 }
 
-fn read_session(cdp: &mut CdpConnection) -> Result<SessionProbe, CdpError> {
-    let value = cdp.evaluate_json(
+fn read_session(page: &mut impl PageSession) -> Result<SessionProbe, PageError> {
+    let value = page.evaluate_json(
         "({ title: document.title, url: location.href, text: (document.body && document.body.innerText || '').slice(0, 4000) })",
     )?;
 
-    serde_json::from_value(value).map_err(CdpError::Json)
+    serde_json::from_value(value).map_err(PageError::Json)
 }
 
-pub(crate) fn search_doi(port: u16, url: &str, doi: &str) -> Result<ScinetResponse, CdpError> {
-    scinet_post(port, url, "/search", json!({ "doi": doi }))
+pub(crate) fn search_doi(
+    page: &mut impl PageSession,
+    url: &str,
+    doi: &str,
+) -> Result<ScinetResponse, PageError> {
+    scinet_post(page, url, "/search", json!({ "doi": doi }))
 }
 
 pub(crate) fn request_doi(
-    port: u16,
+    page: &mut impl PageSession,
     url: &str,
     doi: &str,
     reward: u32,
-) -> Result<ScinetResponse, CdpError> {
+) -> Result<ScinetResponse, PageError> {
     scinet_post(
-        port,
+        page,
         url,
         "/request",
         json!({ "doi": doi, "reward": reward }),
     )
 }
 
-pub(crate) fn view_request(port: u16, url: &str, doi: &str) -> Result<RequestView, CdpError> {
-    let target = page_target(port)?;
-    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+pub(crate) fn view_request(
+    page: &mut impl PageSession,
+    url: &str,
+    doi: &str,
+) -> Result<RequestView, PageError> {
     let doi_path = doi_path(doi);
     let view_url = format!("{}/{}", url.trim_end_matches('/'), doi_path);
 
-    cdp.navigate(&view_url)?;
+    page.navigate(&view_url)?;
 
-    let value = cdp.evaluate_json(
+    let value = page.evaluate_json(
         r#"(() => {
             const values = [];
             for (const element of document.querySelectorAll('a[href], iframe[src], embed[src], object[data]')) {
@@ -226,15 +231,16 @@ pub(crate) fn view_request(port: u16, url: &str, doi: &str) -> Result<RequestVie
         })()"#,
     )?;
 
-    serde_json::from_value(value).map_err(CdpError::Json)
+    serde_json::from_value(value).map_err(PageError::Json)
 }
 
-pub(crate) fn download_pdf(port: u16, pdf_url: &str) -> Result<PdfDownload, CdpError> {
-    let target = page_target(port)?;
-    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+pub(crate) fn download_pdf(
+    page: &mut impl PageSession,
+    pdf_url: &str,
+) -> Result<PdfDownload, PageError> {
     let pdf_url = serde_json::to_string(pdf_url)?;
 
-    let value = cdp.evaluate_json(&format!(
+    let value = page.evaluate_json(&format!(
         r#"(async () => {{
             const response = await fetch({pdf_url}, {{ credentials: 'include' }});
             const bytes = new Uint8Array(await response.arrayBuffer());
@@ -255,7 +261,7 @@ pub(crate) fn download_pdf(port: u16, pdf_url: &str) -> Result<PdfDownload, CdpE
     let response: DownloadResponse = serde_json::from_value(value)?;
 
     if !response.ok {
-        return Err(CdpError::UnexpectedResponse(json!({
+        return Err(PageError::UnexpectedResponse(json!({
             "status": response.status,
             "content_type": response.content_type
         })));
@@ -268,19 +274,17 @@ pub(crate) fn download_pdf(port: u16, pdf_url: &str) -> Result<PdfDownload, CdpE
 }
 
 fn scinet_post(
-    port: u16,
+    page: &mut impl PageSession,
     url: &str,
     path: &str,
     payload: Value,
-) -> Result<ScinetResponse, CdpError> {
-    let target = page_target(port)?;
-    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+) -> Result<ScinetResponse, PageError> {
     let path = serde_json::to_string(path)?;
     let payload = serde_json::to_string(&payload)?;
 
-    cdp.navigate(url)?;
+    page.navigate(url)?;
 
-    let value = cdp.evaluate_json(&format!(
+    let value = page.evaluate_json(&format!(
         r#"(async () => {{
             const response = await fetch({path}, {{
                 method: 'POST',
@@ -299,7 +303,7 @@ fn scinet_post(
         }})()"#
     ))?;
 
-    serde_json::from_value(value).map_err(CdpError::Json)
+    serde_json::from_value(value).map_err(PageError::Json)
 }
 
 fn path_segment(value: &str) -> String {
@@ -335,6 +339,74 @@ struct DownloadResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct FakePageSession {
+        values: Vec<Value>,
+        navigations: Vec<String>,
+        expressions: Vec<String>,
+    }
+
+    impl FakePageSession {
+        fn new(values: Vec<Value>) -> Self {
+            Self {
+                values,
+                navigations: Vec::new(),
+                expressions: Vec::new(),
+            }
+        }
+    }
+
+    impl PageSession for FakePageSession {
+        fn navigate(&mut self, url: &str) -> Result<(), PageError> {
+            self.navigations.push(url.to_string());
+            Ok(())
+        }
+
+        fn evaluate_json(&mut self, expression: &str) -> Result<Value, PageError> {
+            self.expressions.push(expression.to_string());
+
+            if self.values.is_empty() {
+                return Err(PageError::UnexpectedResponse(json!({
+                    "error": "missing fake response"
+                })));
+            }
+
+            Ok(self.values.remove(0))
+        }
+    }
+
+    #[test]
+    fn session_probe_uses_page_session_boundary() {
+        let mut page = FakePageSession::new(vec![json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/",
+            "text": "tokens request library"
+        })]);
+
+        let probe = probe_session(&mut page, SCINET_URL).unwrap();
+
+        assert!(probe.is_logged_in());
+        assert_eq!(page.navigations, vec![SCINET_URL.to_string()]);
+        assert_eq!(page.expressions.len(), 1);
+        assert!(page.expressions[0].contains("document.body"));
+    }
+
+    #[test]
+    fn search_uses_page_session_boundary() {
+        let mut page = FakePageSession::new(vec![json!({
+            "ok": true,
+            "status": 200,
+            "body": { "ok": true }
+        })]);
+
+        let response = search_doi(&mut page, SCINET_URL, "10.1000/snq-example").unwrap();
+
+        assert!(response.ok);
+        assert_eq!(page.navigations, vec![SCINET_URL.to_string()]);
+        assert!(page.expressions[0].contains("fetch(\"/search\""));
+        assert!(page.expressions[0].contains("\"doi\":\"10.1000/snq-example\""));
+    }
 
     #[test]
     fn detects_logged_in_session_text() {
