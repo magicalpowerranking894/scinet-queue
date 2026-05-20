@@ -9,11 +9,13 @@ use std::process;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
 use cdp::{
-    RequestRemoteState, RequestView, ScinetResponse, approve_doi, download_pdf, probe_session,
-    request_doi, search_doi, view_request,
+    RequestRemoteState, RequestView, ScinetResponse, approve_doi, download_pdf,
+    probe_current_session, probe_session, request_doi, search_doi, view_request,
 };
 use queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
@@ -95,14 +97,29 @@ fn run() -> Result<(), String> {
             }
         }
         Some("login") => {
+            let login = parse_login(args)?;
             let browser = detect_browser().map_err(|error| error.to_string())?;
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-            let pid = browser
-                .launch_login(&profile_dir)
-                .map_err(|error| error.to_string())?;
 
-            println!("opened {} browser pid {}", browser.engine, pid);
-            println!("profile {}", profile_dir.display());
+            if login.wait {
+                let cdp_browser = browser
+                    .launch_login_cdp(&profile_dir)
+                    .map_err(|error| error.to_string())?;
+
+                println!("opened {}", browser.engine);
+                println!("profile {}", profile_dir.display());
+                println!("waiting for Sci-Net login; press Ctrl-C to cancel");
+
+                wait_for_login(cdp_browser.port())?;
+                println!("login detected");
+            } else {
+                let pid = browser
+                    .launch_login(&profile_dir)
+                    .map_err(|error| error.to_string())?;
+
+                println!("opened {} browser pid {}", browser.engine, pid);
+                println!("profile {}", profile_dir.display());
+            }
         }
         Some("session") => {
             let browser = detect_browser().map_err(|error| error.to_string())?;
@@ -299,6 +316,35 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
 
 fn format_response(response: &ScinetResponse) -> Result<String, String> {
     serde_json::to_string_pretty(response).map_err(|error| error.to_string())
+}
+
+struct LoginArgs {
+    wait: bool,
+}
+
+fn parse_login(args: impl Iterator<Item = String>) -> Result<LoginArgs, String> {
+    let mut wait = true;
+
+    for arg in args {
+        match arg.as_str() {
+            "--no-wait" => wait = false,
+            unknown => return Err(format!("login: unknown option `{unknown}`")),
+        }
+    }
+
+    Ok(LoginArgs { wait })
+}
+
+fn wait_for_login(port: u16) -> Result<(), String> {
+    loop {
+        let probe = probe_current_session(port).map_err(|error| error.to_string())?;
+
+        if probe.is_logged_in() {
+            return Ok(());
+        }
+
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn update_status_from_remote(
@@ -583,6 +629,7 @@ Usage:
   snq approve <doi>
 
 Options:
+      --no-wait     Open login browser without waiting for authentication
   -h, --help       Print help
   -V, --version    Print version
 "
@@ -592,6 +639,17 @@ Options:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_waits_by_default_and_accepts_no_wait() {
+        assert!(parse_login(std::iter::empty()).unwrap().wait);
+        assert!(
+            !parse_login(["--no-wait"].into_iter().map(str::to_string))
+                .unwrap()
+                .wait
+        );
+        assert!(parse_login(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
 
     #[test]
     fn request_accepts_doi_and_defaults_reward_to_one() {

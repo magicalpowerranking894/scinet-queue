@@ -20,26 +20,40 @@ impl Browser {
     pub fn launch_login(&self, profile_dir: &Path) -> Result<u32, BrowserError> {
         fs::create_dir_all(profile_dir)?;
 
-        let mut command = Command::new(&self.path);
+        #[cfg(target_os = "macos")]
+        if let Some(app_path) = app_bundle_path(&self.path) {
+            let mut command = Command::new("open");
+            command.arg("-na").arg(app_path).arg("--args");
+            add_login_args(&mut command, self.engine, profile_dir);
 
-        match self.engine {
-            BrowserEngine::Chromium => {
-                command
-                    .arg(format!("--user-data-dir={}", profile_dir.display()))
-                    .arg("--no-first-run")
-                    .arg("--no-default-browser-check")
-                    .arg(SCINET_URL);
-            }
-            BrowserEngine::Firefox => {
-                command.arg("--profile").arg(profile_dir).arg(SCINET_URL);
-            }
+            let child = command.spawn()?;
+            return Ok(child.id());
         }
 
-        let child = command.spawn()?;
+        let mut command = Command::new(&self.path);
+        add_login_args(&mut command, self.engine, profile_dir);
+
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
         Ok(child.id())
     }
 
     pub fn launch_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
+        self.launch_chromium_cdp(profile_dir, true)
+    }
+
+    pub fn launch_login_cdp(&self, profile_dir: &Path) -> Result<CdpBrowser, BrowserError> {
+        self.launch_chromium_cdp(profile_dir, false)
+    }
+
+    fn launch_chromium_cdp(
+        &self,
+        profile_dir: &Path,
+        headless: bool,
+    ) -> Result<CdpBrowser, BrowserError> {
         if self.engine != BrowserEngine::Chromium {
             return Err(BrowserError::UnsupportedCdpEngine(self.engine));
         }
@@ -48,19 +62,25 @@ impl Browser {
         let active_port_path = profile_dir.join("DevToolsActivePort");
         let _ = fs::remove_file(&active_port_path);
 
-        let child = Command::new(&self.path)
+        let mut command = Command::new(&self.path);
+        command
             .arg(format!("--user-data-dir={}", profile_dir.display()))
             .arg("--remote-debugging-port=0")
             .arg("--remote-debugging-address=127.0.0.1")
-            .arg("--headless=new")
-            .arg("--disable-gpu")
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
             .arg(SCINET_URL)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+
+        if headless {
+            command.arg("--headless=new").arg("--disable-gpu");
+        } else {
+            command.arg("--new-window");
+        }
+
+        let child = command.spawn()?;
 
         let port = wait_for_devtools_port(&active_port_path, Duration::from_secs(10))?;
 
@@ -248,6 +268,35 @@ fn wait_for_devtools_port(path: &Path, timeout: Duration) -> Result<u16, Browser
     }
 
     Err(BrowserError::DevtoolsPortTimeout(path.to_path_buf()))
+}
+
+fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Path) {
+    match engine {
+        BrowserEngine::Chromium => {
+            command
+                .arg(format!("--user-data-dir={}", profile_dir.display()))
+                .arg("--no-first-run")
+                .arg("--no-default-browser-check")
+                .arg("--new-window")
+                .arg(SCINET_URL);
+        }
+        BrowserEngine::Firefox => {
+            command.arg("--profile").arg(profile_dir).arg(SCINET_URL);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_path(binary_path: &Path) -> Option<PathBuf> {
+    let mut path = binary_path;
+
+    loop {
+        if path.extension().and_then(|value| value.to_str()) == Some("app") {
+            return Some(path.to_path_buf());
+        }
+
+        path = path.parent()?;
+    }
 }
 
 fn parse_devtools_port(contents: &str) -> Option<u16> {

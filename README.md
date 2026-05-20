@@ -65,14 +65,16 @@ Approval is always explicit.
 
 ## Browser Session
 
-`snq login` opens a tool-owned browser profile:
+`snq login` opens a tool-owned browser profile, waits until Sci-Net is logged
+in, then closes the browser:
 
 ```sh
 snq login
 ```
 
-The user logs into Sci-Net once. Later commands reuse that profile without
-taking over the user's normal browser.
+The user logs into Sci-Net once. Later commands reuse that profile headlessly
+without taking over the user's normal browser. Use `snq login --no-wait` to
+leave the login browser open.
 
 `snq session` starts the managed profile headlessly and checks whether Sci-Net
 loads with a logged-in session.

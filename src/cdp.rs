@@ -181,7 +181,17 @@ pub fn probe_session(port: u16, url: &str) -> Result<SessionProbe, CdpError> {
     let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
 
     cdp.navigate(url)?;
+    read_session(&mut cdp)
+}
 
+pub fn probe_current_session(port: u16) -> Result<SessionProbe, CdpError> {
+    let target = page_target(port)?;
+    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+
+    read_session(&mut cdp)
+}
+
+fn read_session(cdp: &mut CdpConnection) -> Result<SessionProbe, CdpError> {
     let value = cdp.evaluate_json(
         "({ title: document.title, url: location.href, text: (document.body && document.body.innerText || '').slice(0, 4000) })",
     )?;
