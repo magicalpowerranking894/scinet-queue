@@ -1248,6 +1248,7 @@ mod tests {
             body: serde_json::json!({ "success": false, "message": "invalid request" }),
         };
 
-        assert!(ensure_request_ok("10.1000/snq-alt", &response).is_err());
+        let error = ensure_request_ok("10.1000/snq-alt", &response).unwrap_err();
+        assert!(error.contains("invalid request"));
     }
 }

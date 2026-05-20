@@ -51,6 +51,16 @@ pub(crate) struct PdfDownload {
     pub(crate) content_type: Option<String>,
 }
 
+const RESPONSE_REASON_KEYS: &[&str] = &[
+    "message",
+    "msg",
+    "reason",
+    "detail",
+    "details",
+    "description",
+    "text",
+];
+
 impl RequestView {
     pub(crate) fn looks_logged_out(&self) -> bool {
         looks_like_login_text(&self.text)
@@ -114,28 +124,50 @@ impl ScinetResponse {
         if self.body.get("ok").and_then(Value::as_bool) == Some(false)
             || self.body.get("success").and_then(Value::as_bool) == Some(false)
         {
+            if let Some(reason) = response_reason(&self.body) {
+                return Some(format!("response body reported failure: {reason}"));
+            }
+
             return Some("response body reported failure".to_string());
         }
 
         for key in ["error", "errors"] {
-            if let Some(value) = self.body.get(key).filter(|value| !value.is_null()) {
+            if let Some(value) = self
+                .body
+                .get(key)
+                .filter(|value| error_value_is_present(value))
+            {
+                if let Some(reason) = response_reason(&self.body) {
+                    return Some(format!("response body reported `{key}`: {reason}"));
+                }
+
+                if value.as_bool() == Some(true) {
+                    return Some(format!(
+                        "response body reported `{key}`=true without a reason"
+                    ));
+                }
+
                 return Some(format!("response body contained `{key}`: {value}"));
             }
         }
 
-        let text = self
+        let raw_text = self
             .body
             .get("message")
             .or_else(|| self.body.get("text"))
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+            .unwrap_or_default();
+        let text = raw_text.to_ascii_lowercase();
 
         if looks_like_login_text(&text)
             || text.contains("error")
             || text.contains("failed")
             || text.contains("invalid")
         {
+            if let Some(reason) = compact_reason(raw_text) {
+                return Some(format!("response body looked like an error: {reason}"));
+            }
+
             return Some("response body looked like an error".to_string());
         }
 
@@ -163,6 +195,83 @@ fn looks_like_working_text(text: &str) -> bool {
     text.contains("working on solving")
         || text.contains("will upload pdf")
         || text.contains("is working on")
+}
+
+fn response_reason(body: &Value) -> Option<String> {
+    let map = body.as_object()?;
+
+    for key in RESPONSE_REASON_KEYS {
+        if let Some(reason) = map.get(*key).and_then(reason_from_value) {
+            return Some(reason);
+        }
+    }
+
+    for key in ["error", "errors"] {
+        if let Some(reason) = map.get(key).and_then(reason_from_value) {
+            return Some(reason);
+        }
+    }
+
+    None
+}
+
+fn reason_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => compact_reason(text),
+        Value::Array(values) => values
+            .iter()
+            .find_map(reason_from_value)
+            .or_else(|| compact_json_reason(value)),
+        Value::Object(map) => RESPONSE_REASON_KEYS
+            .iter()
+            .find_map(|key| map.get(*key).and_then(reason_from_value))
+            .or_else(|| compact_json_reason(value)),
+        Value::Number(_) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn compact_json_reason(value: &Value) -> Option<String> {
+    if matches!(value, Value::Null | Value::Bool(_)) {
+        return None;
+    }
+
+    compact_reason(&value.to_string())
+}
+
+fn compact_reason(text: &str) -> Option<String> {
+    const MAX_REASON_CHARS: usize = 240;
+
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if compact.is_empty() {
+        return None;
+    }
+
+    if compact.chars().count() <= MAX_REASON_CHARS {
+        return Some(compact);
+    }
+
+    let mut truncated = compact
+        .chars()
+        .take(MAX_REASON_CHARS.saturating_sub(3))
+        .collect::<String>();
+    truncated.push_str("...");
+    Some(truncated)
+}
+
+fn error_value_is_present(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::String(value) => {
+            let value = value.trim();
+            !value.is_empty() && !value.eq_ignore_ascii_case("false")
+        }
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(map) => !map.is_empty(),
+        _ => true,
+    }
 }
 
 impl RequestRemoteState {
@@ -622,7 +731,43 @@ mod tests {
             body: json!({ "ok": false, "message": "invalid DOI" }),
         };
 
-        assert!(response.logical_error().is_some());
+        let error = response.logical_error().unwrap();
+        assert!(error.contains("invalid DOI"));
+    }
+
+    #[test]
+    fn reports_scinet_error_reason() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({ "error": true, "message": "not enough tokens" }),
+        };
+
+        let error = response.logical_error().unwrap();
+        assert!(error.contains("not enough tokens"));
+    }
+
+    #[test]
+    fn reports_boolean_scinet_error_without_reason() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({ "error": true }),
+        };
+
+        let error = response.logical_error().unwrap();
+        assert!(error.contains("error`=true"));
+    }
+
+    #[test]
+    fn ignores_false_scinet_error_field() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({ "error": false }),
+        };
+
+        assert!(response.logical_error().is_none());
     }
 
     #[test]

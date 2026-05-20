@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Surfaced Sci-Net request error reasons when response bodies include them.
+- Documented quoting DOI arguments that contain shell metacharacters such as
+  parentheses.
 - Clarified browser-exit and profile-in-use errors after `login --no-wait`.
 - Added Sci-Net open-access and Sci-Hub availability hints to `fetch` output
   when no request-page PDF is downloadable.

@@ -99,10 +99,17 @@ Check whether Sci-Net can find a DOI:
 snq check 10.1000/snq-example
 ```
 
+Shells such as zsh treat some DOI characters, including parentheses, as glob
+syntax. Quote DOIs with shell metacharacters:
+
+```sh
+snq check '10.1000/snq-example(1)'
+```
+
 Request one queued paper, or request all queued papers:
 
 ```sh
-snq request 10.1000/snq-example --reward 1
+snq request '10.1000/snq-example(1)' --reward 1
 snq request --all --reward 1
 ```
 
