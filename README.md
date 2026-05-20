@@ -22,6 +22,7 @@ cargo install --path .
 snq login
 snq session
 snq add 10.1287/mnsc.2024.05040
+snq import papers.md
 snq list
 snq remove 10.1287/mnsc.2024.05040
 snq check 10.1287/mnsc.2024.05040
@@ -31,6 +32,9 @@ snq fetch 10.1287/mnsc.2024.05040 --out papers
 snq fetch --out papers
 snq approve 10.1287/mnsc.2024.05040
 ```
+
+`snq add` accepts one or more DOIs. `snq import <path>` extracts DOIs from a
+plain text or Markdown file. Use `snq import -` to read from stdin.
 
 `snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
 

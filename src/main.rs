@@ -2,10 +2,12 @@ mod browser;
 mod cdp;
 mod queue;
 
+use std::collections::HashSet;
 use std::env;
 use std::process;
 
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
@@ -38,13 +40,37 @@ fn run() -> Result<(), String> {
             println!("snq {VERSION}");
         }
         Some("add") => {
-            let Some(doi) = args.next() else {
+            let dois = args.collect::<Vec<_>>();
+
+            if dois.is_empty() {
                 return Err("add: missing DOI".to_string());
+            }
+
+            for doi in dois {
+                match queue.add(&doi).map_err(|error| error.to_string())? {
+                    AddResult::Queued(doi) => println!("queued {doi}"),
+                    AddResult::AlreadyQueued(doi) => println!("already queued {doi}"),
+                }
+            }
+        }
+        Some("import") => {
+            let Some(path) = args.next() else {
+                return Err("import: missing path".to_string());
             };
 
-            match queue.add(&doi).map_err(|error| error.to_string())? {
-                AddResult::Queued(doi) => println!("queued {doi}"),
-                AddResult::AlreadyQueued(doi) => println!("already queued {doi}"),
+            let text = read_import_text(&path)?;
+            let dois = extract_dois(&text);
+
+            if dois.is_empty() {
+                println!("no DOIs found");
+                return Ok(());
+            }
+
+            for doi in dois {
+                match queue.add(&doi).map_err(|error| error.to_string())? {
+                    AddResult::Queued(doi) => println!("queued {doi}"),
+                    AddResult::AlreadyQueued(doi) => println!("already queued {doi}"),
+                }
             }
         }
         Some("list" | "ls") => {
@@ -269,6 +295,42 @@ fn format_response(response: &ScinetResponse) -> Result<String, String> {
     serde_json::to_string_pretty(response).map_err(|error| error.to_string())
 }
 
+fn read_import_text(path: &str) -> Result<String, String> {
+    if path == "-" {
+        let mut input = String::new();
+        io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|error| error.to_string())?;
+        Ok(input)
+    } else {
+        fs::read_to_string(path).map_err(|error| error.to_string())
+    }
+}
+
+fn extract_dois(text: &str) -> Vec<String> {
+    let mut dois = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (start, _) in text.match_indices("10.") {
+        let tail = &text[start..];
+        let raw = tail
+            .split(|ch: char| ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\''))
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(['.', ',', ';', ':', ')', ']', '}']);
+
+        let Ok(doi) = normalize_doi(raw) else {
+            continue;
+        };
+
+        if seen.insert(doi.clone()) {
+            dois.push(doi);
+        }
+    }
+
+    dois
+}
+
 fn parse_reward(args: impl Iterator<Item = String>) -> Result<u32, String> {
     let mut reward = 1;
     let mut args = args.peekable();
@@ -428,7 +490,8 @@ A tiny agent-friendly DOI queue for Sci-Net.
 Usage:
   snq login
   snq session
-  snq add <doi>
+  snq add <doi>...
+  snq import <path|->
   snq list
   snq remove <doi>
   snq check <doi>
@@ -470,6 +533,23 @@ mod tests {
         assert!(parse_reward(["--reward", "0"].into_iter().map(str::to_string)).is_err());
         assert!(parse_reward(["--reward"].into_iter().map(str::to_string)).is_err());
         assert!(parse_reward(["--foo"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn extracts_dois_from_markdown_text() {
+        let text = r#"
+- https://doi.org/10.1287/MNSC.2024.05040
+- doi:10.1093/rfs/hhaa075.
+- duplicate 10.1287/mnsc.2024.05040
+"#;
+
+        assert_eq!(
+            extract_dois(text),
+            vec![
+                "10.1287/mnsc.2024.05040".to_string(),
+                "10.1093/rfs/hhaa075".to_string()
+            ]
+        );
     }
 
     #[test]
