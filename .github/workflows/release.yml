@@ -17,9 +17,6 @@ concurrency:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: build (${{ matrix.target }})
@@ -80,7 +77,7 @@ jobs:
           Copy-Item README.md, LICENSE, CHANGELOG.md $stage
           Compress-Archive -Path "$stage\*" -DestinationPath $asset -Force
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: snq-${{ env.TAG }}-${{ matrix.target }}
           path: snq-${{ env.TAG }}-${{ matrix.target }}.*
@@ -95,7 +92,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
