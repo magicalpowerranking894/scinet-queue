@@ -131,6 +131,7 @@ the PDF was reviewed outside `snq`.
 Agent-facing JSON is available for commands that need structured output:
 
 ```sh
+snq session --json
 snq list --json
 snq request --all --reward 1 --json
 snq watch --json
@@ -139,6 +140,9 @@ snq fetch --json
 snq approve 10.1000/snq-example --json
 snq doctor --json
 ```
+
+`snq check <doi>` prints the Sci-Net response as JSON without a separate
+`--json` flag.
 
 Example `snq list --json` output:
 
@@ -163,6 +167,29 @@ Example `snq watch --json` output:
     "remote_state": "pdf"
   }
 ]
+```
+
+Example `snq fetch --json` output:
+
+```json
+[
+  {
+    "doi": "10.1000/snq-example",
+    "status": "no-pdf",
+    "remote_state": "working",
+    "path": null
+  }
+]
+```
+
+Example `snq approve --json` output:
+
+```json
+{
+  "doi": "10.1000/snq-example",
+  "status": "approved",
+  "forced": false
+}
 ```
 
 ## Browser Sessions

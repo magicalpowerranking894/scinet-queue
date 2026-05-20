@@ -21,7 +21,7 @@ snq ...
 ## Environment
 
 - OS:
-- Browser:
+- Browser/engine + version:
 - `snq --version`:
 
 ## Notes

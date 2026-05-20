@@ -7,7 +7,7 @@
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked
-cargo package --locked
+cargo package --locked # when changing crate metadata or release packaging
 ```
 
 ## Notes
