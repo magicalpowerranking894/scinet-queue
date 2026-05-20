@@ -8,8 +8,8 @@ use crate::args::{
 use crate::browser::{detect_browser, profile_dir};
 use crate::doctor::{doctor_report, print_doctor_report};
 use crate::output::{
-    RequestOutput, SessionOutput, ViewOutput, WatchOutput, compact_text, format_response,
-    print_help, print_json,
+    ApproveOutput, FetchOutput, FetchOutputStatus, RequestOutput, SessionOutput, ViewOutput,
+    WatchOutput, compact_text, format_response, print_help, print_json,
 };
 use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
 use crate::papers::{extract_dois, fetch_dois, fetch_one, read_import_text};
@@ -341,6 +341,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let dois = fetch_dois(&queue, fetch.doi.as_deref())?;
 
             if dois.is_empty() {
+                if fetch.json {
+                    print_json(&Vec::<FetchOutput>::new())?;
+                    return Ok(());
+                }
+
                 println!("queue empty");
                 return Ok(());
             }
@@ -348,38 +353,69 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let outputs = with_scinet_page(|page| {
                 loop {
                     let mut outputs = Vec::new();
+                    let mut fetched_any = false;
 
                     for doi in &dois {
                         match fetch_one(&queue, page, doi, &fetch.out_dir) {
-                            Ok(Some(path)) => outputs.push(path),
-                            Ok(None) => {}
+                            Ok(Some(path)) => {
+                                fetched_any = true;
+                                outputs.push(FetchOutput {
+                                    doi: doi.clone(),
+                                    status: FetchOutputStatus::Fetched,
+                                    path: Some(path.display().to_string()),
+                                });
+                            }
+                            Ok(None) => outputs.push(FetchOutput {
+                                doi: doi.clone(),
+                                status: FetchOutputStatus::NoPdf,
+                                path: None,
+                            }),
                             Err(error) => return Err(error),
                         }
                     }
 
-                    if !outputs.is_empty() || !fetch.wait {
+                    if fetched_any || !fetch.wait {
                         return Ok(outputs);
                     }
 
-                    println!("no PDFs available; waiting {}s", fetch.poll_secs);
+                    if fetch.json {
+                        eprintln!("no PDFs available; waiting {}s", fetch.poll_secs);
+                    } else {
+                        println!("no PDFs available; waiting {}s", fetch.poll_secs);
+                    }
                     thread::sleep(Duration::from_secs(fetch.poll_secs));
                 }
             })?;
 
-            if outputs.is_empty() {
+            if fetch.json {
+                print_json(&outputs)?;
+            } else if outputs
+                .iter()
+                .all(|output| output.path.as_deref().is_none())
+            {
                 println!("no PDFs available");
             } else {
-                for path in outputs {
-                    println!("{}", path.display());
+                for output in outputs {
+                    if let Some(path) = output.path {
+                        println!("{path}");
+                    }
                 }
             }
         }
         Some("approve") => {
             let approve = parse_approve(args)?;
-            let doi = approve.doi;
+            let doi = approve.doi.clone();
             ensure_can_approve(&queue, &doi, approve.force)?;
             mark_approved(&queue, &doi)?;
 
+            if approve.json {
+                print_json(&ApproveOutput {
+                    doi,
+                    status: QueueStatus::Approved,
+                    forced: approve.force,
+                })?;
+                return Ok(());
+            }
             println!("approved\t{doi}");
         }
         Some("doctor") => {

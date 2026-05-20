@@ -40,8 +40,8 @@ Usage:
   snq request <doi|--all> [--reward <n>] [--json]
   snq watch [--json]
   snq view <doi> [--json]
-  snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>]
-  snq approve <doi> [--force]
+  snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>] [--json]
+  snq approve <doi> [--force] [--json]
   snq doctor [--json]
 
 Options:
@@ -68,6 +68,27 @@ pub(crate) struct SessionOutput {
 pub(crate) struct RequestOutput {
     pub(crate) doi: String,
     pub(crate) response: ScinetResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct FetchOutput {
+    pub(crate) doi: String,
+    pub(crate) status: FetchOutputStatus,
+    pub(crate) path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum FetchOutputStatus {
+    Fetched,
+    NoPdf,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ApproveOutput {
+    pub(crate) doi: String,
+    pub(crate) status: QueueStatus,
+    pub(crate) forced: bool,
 }
 
 #[derive(Debug, Serialize)]

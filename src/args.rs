@@ -18,6 +18,7 @@ pub(crate) struct FetchArgs {
     pub(crate) out_dir: PathBuf,
     pub(crate) wait: bool,
     pub(crate) poll_secs: u64,
+    pub(crate) json: bool,
 }
 
 pub(crate) struct ViewArgs {
@@ -28,6 +29,7 @@ pub(crate) struct ViewArgs {
 pub(crate) struct ApproveArgs {
     pub(crate) doi: String,
     pub(crate) force: bool,
+    pub(crate) json: bool,
 }
 
 pub(crate) fn parse_json_flag(
@@ -142,10 +144,12 @@ pub(crate) fn parse_view(args: impl Iterator<Item = String>) -> Result<ViewArgs,
 pub(crate) fn parse_approve(args: impl Iterator<Item = String>) -> Result<ApproveArgs, String> {
     let mut doi = None;
     let mut force = false;
+    let mut json = false;
 
     for arg in args {
         match arg.as_str() {
             "--force" => force = true,
+            "--json" => json = true,
             value if value.starts_with('-') => {
                 return Err(format!("approve: unknown option `{value}`"));
             }
@@ -163,7 +167,7 @@ pub(crate) fn parse_approve(args: impl Iterator<Item = String>) -> Result<Approv
         return Err("approve: missing DOI".to_string());
     };
 
-    Ok(ApproveArgs { doi, force })
+    Ok(ApproveArgs { doi, force, json })
 }
 
 pub(crate) fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArgs, String> {
@@ -171,11 +175,13 @@ pub(crate) fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArg
     let mut out_dir = PathBuf::from("papers");
     let mut wait = false;
     let mut poll_secs = 30;
+    let mut json = false;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--wait" => wait = true,
+            "--json" => json = true,
             "--poll" => {
                 let Some(value) = args.next() else {
                     return Err("fetch: missing value for --poll".to_string());
@@ -214,6 +220,7 @@ pub(crate) fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArg
         out_dir,
         wait,
         poll_secs,
+        json,
     })
 }
 
@@ -303,6 +310,16 @@ mod tests {
 
         assert_eq!(args.doi, "10.1000/snq-example");
         assert!(args.force);
+        assert!(!args.json);
+        assert!(
+            parse_approve(
+                ["10.1000/snq-example", "--json"]
+                    .into_iter()
+                    .map(str::to_string)
+            )
+            .unwrap()
+            .json
+        );
         assert!(parse_approve(std::iter::empty()).is_err());
         assert!(parse_approve(["--bad"].into_iter().map(str::to_string)).is_err());
     }
@@ -314,6 +331,7 @@ mod tests {
         assert_eq!(args.out_dir, PathBuf::from("papers"));
         assert!(!args.wait);
         assert_eq!(args.poll_secs, 30);
+        assert!(!args.json);
     }
 
     #[test]
@@ -344,6 +362,11 @@ mod tests {
 
         assert!(args.wait);
         assert_eq!(args.poll_secs, 5);
+        assert!(
+            parse_fetch(["--json"].into_iter().map(str::to_string))
+                .unwrap()
+                .json
+        );
     }
 
     #[test]

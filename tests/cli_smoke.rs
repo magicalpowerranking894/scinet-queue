@@ -105,6 +105,85 @@ fn request_all_json_prints_empty_array_for_empty_queue() {
 }
 
 #[test]
+fn fetch_json_prints_empty_array_for_empty_queue() {
+    let dir = temp_workspace("fetch-empty-json");
+
+    let fetch = snq()
+        .current_dir(&dir)
+        .args(["fetch", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(fetch.status.success());
+    assert_eq!(String::from_utf8_lossy(&fetch.stdout), "[]\n");
+    assert!(fetch.stderr.is_empty());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn approve_json_marks_entry_approved() {
+    let dir = temp_workspace("approve-json");
+
+    let add = snq()
+        .current_dir(&dir)
+        .args(["add", "10.1000/snq-example"])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+
+    let approve = snq()
+        .current_dir(&dir)
+        .args(["approve", "10.1000/snq-example", "--force", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(approve.status.success());
+    assert!(approve.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&approve.stdout).unwrap();
+    assert_eq!(value["doi"], "10.1000/snq-example");
+    assert_eq!(value["status"], "approved");
+    assert_eq!(value["forced"], true);
+
+    let list = snq()
+        .current_dir(&dir)
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let entries: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(entries[0]["status"], "approved");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn approve_json_errors_are_machine_readable() {
+    let dir = temp_workspace("approve-json-error");
+
+    let add = snq()
+        .current_dir(&dir)
+        .args(["add", "10.1000/snq-example"])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+
+    let approve = snq()
+        .current_dir(&dir)
+        .args(["approve", "10.1000/snq-example", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!approve.status.success());
+    assert!(approve.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&approve.stderr).contains("snq:"));
+    let value: serde_json::Value = serde_json::from_slice(&approve.stderr).unwrap();
+    assert!(value["error"].as_str().unwrap().contains("is not fetched"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn json_errors_are_machine_readable() {
     let home = temp_workspace("json-error-home");
     let dir = temp_workspace("json-error-workspace");
