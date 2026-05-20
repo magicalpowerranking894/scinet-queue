@@ -4,10 +4,9 @@ use fs2::FileExt;
 use std::env;
 use std::fmt;
 use std::fs;
+#[cfg(not(windows))]
 use std::fs::File;
 use std::io::Write;
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -331,7 +330,12 @@ fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Pa
 
 #[derive(Debug)]
 struct ProfileLock {
+    #[cfg(not(windows))]
     _file: File,
+    #[cfg(windows)]
+    path: PathBuf,
+    #[cfg(windows)]
+    token: String,
 }
 
 impl ProfileLock {
@@ -379,21 +383,20 @@ impl ProfileLock {
 
         loop {
             match fs::OpenOptions::new()
-                .read(true)
                 .write(true)
-                .create(true)
-                .truncate(false)
-                .share_mode(0)
+                .create_new(true)
                 .open(&path)
             {
                 Ok(mut file) => {
-                    file.set_len(0)?;
                     writeln!(file, "{token}")?;
                     file.sync_all()?;
 
-                    return Ok(Self { _file: file });
+                    return Ok(Self {
+                        path: path.clone(),
+                        token,
+                    });
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     if start.elapsed() >= timeout {
                         return Err(BrowserError::ProfileLocked(path));
                     }
@@ -415,7 +418,14 @@ impl Drop for ProfileLock {
 
 #[cfg(windows)]
 impl Drop for ProfileLock {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        if fs::read_to_string(&self.path)
+            .map(|contents| contents.trim() == self.token)
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

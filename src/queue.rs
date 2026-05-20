@@ -3,10 +3,9 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
+#[cfg(not(windows))]
 use std::fs::File;
 use std::io::{self, BufRead, Write};
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -316,7 +315,12 @@ fn temp_path_for(path: &Path) -> PathBuf {
 
 #[derive(Debug)]
 struct QueueLock {
+    #[cfg(not(windows))]
     _file: File,
+    #[cfg(windows)]
+    path: PathBuf,
+    #[cfg(windows)]
+    token: String,
 }
 
 impl QueueLock {
@@ -367,21 +371,20 @@ impl QueueLock {
 
         loop {
             match fs::OpenOptions::new()
-                .read(true)
                 .write(true)
-                .create(true)
-                .truncate(false)
-                .share_mode(0)
+                .create_new(true)
                 .open(path)
             {
                 Ok(mut file) => {
-                    file.set_len(0)?;
                     writeln!(file, "{token}")?;
                     file.sync_all()?;
 
-                    return Ok(Self { _file: file });
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                        token,
+                    });
                 }
-                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     if start.elapsed() >= timeout {
                         return Err(QueueError::QueueLocked(path.to_path_buf()));
                     }
@@ -403,7 +406,14 @@ impl Drop for QueueLock {
 
 #[cfg(windows)]
 impl Drop for QueueLock {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        if fs::read_to_string(&self.path)
+            .map(|contents| contents.trim() == self.token)
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 fn unix_time() -> u64 {
