@@ -103,8 +103,8 @@ impl fmt::Display for PageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PageError::Base64(error) => write!(f, "{error}"),
-            PageError::Bidi(error) => write!(f, "{error}"),
-            PageError::Cdp(error) => write!(f, "{error}"),
+            PageError::Bidi(error) => write!(f, "BiDi: {error}"),
+            PageError::Cdp(error) => write!(f, "CDP: {error}"),
             PageError::Json(error) => write!(f, "{error}"),
             PageError::UnexpectedResponse(value) => {
                 write!(f, "unexpected browser response: {value}")
@@ -134,5 +134,24 @@ impl From<CdpError> for PageError {
 impl From<serde_json::Error> for PageError {
     fn from(error: serde_json::Error) -> Self {
         PageError::Json(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_error_names_cdp_protocol() {
+        let error = PageError::Cdp(CdpError::ReadyStateTimeout);
+
+        assert!(error.to_string().starts_with("CDP: "));
+    }
+
+    #[test]
+    fn page_error_names_bidi_protocol() {
+        let error = PageError::Bidi(BidiError::ConnectTimeout(9222));
+
+        assert!(error.to_string().starts_with("BiDi: "));
     }
 }
