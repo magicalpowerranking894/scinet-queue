@@ -356,7 +356,6 @@ impl QueueLock {
                     writeln!(file, "{token}")?;
 
                     return Ok(Self {
-                        file,
                         path: path.to_path_buf(),
                         token,
                     });
