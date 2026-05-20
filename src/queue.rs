@@ -290,9 +290,14 @@ fn temp_path_for(path: &Path) -> PathBuf {
 #[derive(Debug)]
 struct QueueLock {
     file: File,
+    #[cfg(windows)]
+    path: PathBuf,
+    #[cfg(windows)]
+    token: String,
 }
 
 impl QueueLock {
+    #[cfg(not(windows))]
     fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -326,11 +331,61 @@ impl QueueLock {
             }
         }
     }
+
+    #[cfg(windows)]
+    fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let start = Instant::now();
+        let token = lock_token();
+
+        loop {
+            match fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(mut file) => {
+                    writeln!(file, "{token}")?;
+
+                    return Ok(Self {
+                        file,
+                        path: path.to_path_buf(),
+                        token,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if start.elapsed() >= timeout {
+                        return Err(QueueError::QueueLocked(path.to_path_buf()));
+                    }
+
+                    thread::sleep(QUEUE_LOCK_POLL);
+                }
+                Err(error) => return Err(QueueError::Io(error)),
+            }
+        }
+    }
 }
 
+#[cfg(not(windows))]
 impl Drop for QueueLock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.file);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for QueueLock {
+    fn drop(&mut self) {
+        if fs::read_to_string(&self.path)
+            .map(|contents| contents.trim() == self.token)
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -467,7 +522,7 @@ mod tests {
             let ready_path = PathBuf::from(ready_path);
             let _lock = QueueLock::acquire(&path, Duration::from_secs(1)).unwrap();
             fs::write(ready_path, "ready").unwrap();
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(1));
             return;
         }
 
@@ -496,8 +551,7 @@ mod tests {
         let second = QueueLock::acquire(&path, Duration::from_millis(1));
         assert!(matches!(second, Err(QueueError::QueueLocked(_))));
 
-        let _ = child.kill();
-        let _ = child.wait();
+        assert!(child.wait().unwrap().success());
         assert!(QueueLock::acquire(&path, Duration::from_secs(1)).is_ok());
 
         let _ = fs::remove_dir_all(dir);
