@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use crate::page::PageSession;
 use crate::queue::{Queue, QueueStatus, StatusResult, normalize_doi};
-use crate::scinet::{RequestRemoteState, SCINET_URL, download_pdf, view_request};
+use crate::scinet::{
+    RequestRemoteState, SCINET_URL, ScinetAvailability, download_pdf, search_doi, view_request,
+};
 
 pub(crate) fn read_import_text(path: &str) -> Result<String, String> {
     if path == "-" {
@@ -116,7 +118,11 @@ pub(crate) fn fetch_one(
             let _ = update_status_from_remote(queue, status, doi, remote_state)?;
         }
 
-        return Ok(FetchResult::NoPdf(remote_state));
+        let availability = scinet_availability(page, doi);
+        return Ok(FetchResult::NoPdf {
+            remote_state,
+            availability,
+        });
     };
     let download = download_pdf(page, pdf_url).map_err(|error| error.to_string())?;
 
@@ -133,7 +139,10 @@ pub(crate) fn fetch_one(
 
 pub(crate) enum FetchResult {
     Fetched(PathBuf),
-    NoPdf(RequestRemoteState),
+    NoPdf {
+        remote_state: RequestRemoteState,
+        availability: Vec<ScinetAvailability>,
+    },
 }
 
 pub(crate) fn update_status_from_remote(
@@ -162,6 +171,12 @@ fn queue_status(queue: &Queue, doi: &str) -> Result<Option<QueueStatus>, String>
         .into_iter()
         .find(|entry| entry.doi == doi)
         .map(|entry| entry.status))
+}
+
+fn scinet_availability(page: &mut impl PageSession, doi: &str) -> Vec<ScinetAvailability> {
+    search_doi(page, SCINET_URL, doi)
+        .map(|response| response.availability())
+        .unwrap_or_default()
 }
 
 fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -369,15 +384,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("snq-fetch-state-test-{}", std::process::id()));
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
-        let mut page = FakePageSession;
+        let mut page = FakePageSession { calls: 0 };
 
         queue.add("10.1000/snq-example").unwrap();
         let result = fetch_one(&queue, &mut page, "10.1000/snq-example", &dir).unwrap();
 
-        assert!(matches!(
-            result,
-            FetchResult::NoPdf(RequestRemoteState::Working)
-        ));
+        match result {
+            FetchResult::NoPdf {
+                remote_state,
+                availability,
+            } => {
+                assert_eq!(remote_state, RequestRemoteState::Working);
+                assert_eq!(availability, vec![ScinetAvailability::OpenAccess]);
+            }
+            FetchResult::Fetched(_) => panic!("expected no PDF"),
+        }
         assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Working);
 
         let _ = fs::remove_dir_all(dir);
@@ -409,7 +430,9 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    struct FakePageSession;
+    struct FakePageSession {
+        calls: usize,
+    }
 
     impl PageSession for FakePageSession {
         fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
@@ -420,12 +443,24 @@ mod tests {
             &mut self,
             _expression: &str,
         ) -> Result<serde_json::Value, crate::page::PageError> {
-            Ok(serde_json::json!({
-                "title": "Sci-Net",
-                "url": "https://sci-net.xyz/10.1000/snq-example",
-                "text": "A member is working on solving this request and will upload PDF soon.",
-                "pdf_urls": []
-            }))
+            self.calls += 1;
+
+            if self.calls == 1 {
+                Ok(serde_json::json!({
+                    "title": "Sci-Net",
+                    "url": "https://sci-net.xyz/10.1000/snq-example",
+                    "text": "A member is working on solving this request and will upload PDF soon.",
+                    "pdf_urls": []
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "status": 200,
+                    "body": {
+                        "open_access": true
+                    }
+                }))
+            }
         }
     }
 }

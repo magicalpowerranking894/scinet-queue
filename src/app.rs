@@ -28,8 +28,8 @@ use crate::queue::{
     normalize_doi,
 };
 use crate::scinet::{
-    RequestRemoteState, RequestView, SCINET_URL, ScinetResponse, probe_current_session,
-    probe_session, request_doi, search_doi, view_request,
+    RequestRemoteState, RequestView, SCINET_URL, ScinetAvailability, ScinetResponse,
+    probe_current_session, probe_session, request_doi, search_doi, view_request,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -737,16 +737,21 @@ where
                     doi,
                     status: FetchOutputStatus::Fetched,
                     remote_state: RequestRemoteState::Pdf,
+                    availability: Vec::new(),
                     path: Some(path.display().to_string()),
                 }),
-                FetchResult::NoPdf(remote_state) => {
-                    if wait {
+                FetchResult::NoPdf {
+                    remote_state,
+                    availability,
+                } => {
+                    if wait && availability.is_empty() {
                         next_pending.push(doi);
                     } else {
                         outputs.push(FetchOutput {
                             doi,
                             status: FetchOutputStatus::NoPdf,
                             remote_state,
+                            availability,
                             path: None,
                         });
                     }
@@ -766,8 +771,24 @@ where
 fn fetch_text_line(output: &FetchOutput) -> String {
     match output.path.as_deref() {
         Some(path) => path.to_string(),
-        None => format!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi),
+        None if output.availability.is_empty() => {
+            format!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi)
+        }
+        None => format!(
+            "no-pdf\t{}\t{}\tavailability={}",
+            output.remote_state.as_str(),
+            output.doi,
+            format_availability(&output.availability)
+        ),
     }
+}
+
+fn format_availability(availability: &[ScinetAvailability]) -> String {
+    availability
+        .iter()
+        .map(|availability| availability.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -986,7 +1007,10 @@ mod tests {
 
                 match (calls.len(), doi) {
                     (1, "10.1000/one") => Ok(FetchResult::Fetched("papers/one.pdf".into())),
-                    (2, "10.1000/two") => Ok(FetchResult::NoPdf(RequestRemoteState::Working)),
+                    (2, "10.1000/two") => Ok(FetchResult::NoPdf {
+                        remote_state: RequestRemoteState::Working,
+                        availability: Vec::new(),
+                    }),
                     (3, "10.1000/two") => Ok(FetchResult::Fetched("papers/two.pdf".into())),
                     _ => panic!("unexpected fetch call sequence: {calls:?}"),
                 }
@@ -1012,12 +1036,66 @@ mod tests {
     }
 
     #[test]
+    fn fetch_wait_stops_polling_targets_with_scinet_availability() {
+        let dois = vec!["10.1000/open".to_string(), "10.1000/pending".to_string()];
+        let mut calls = Vec::new();
+        let mut waits = Vec::new();
+
+        let outputs = fetch_until_complete(
+            &dois,
+            true,
+            |doi| {
+                calls.push(doi.to_string());
+
+                match (calls.len(), doi) {
+                    (1, "10.1000/open") => Ok(FetchResult::NoPdf {
+                        remote_state: RequestRemoteState::Pending,
+                        availability: vec![ScinetAvailability::OpenAccess],
+                    }),
+                    (2, "10.1000/pending") => Ok(FetchResult::NoPdf {
+                        remote_state: RequestRemoteState::Pending,
+                        availability: Vec::new(),
+                    }),
+                    (3, "10.1000/pending") => Ok(FetchResult::Fetched("papers/pending.pdf".into())),
+                    _ => panic!("unexpected fetch call sequence: {calls:?}"),
+                }
+            },
+            |remaining| waits.push(remaining),
+        )
+        .unwrap();
+
+        assert_eq!(
+            calls,
+            vec![
+                "10.1000/open".to_string(),
+                "10.1000/pending".to_string(),
+                "10.1000/pending".to_string()
+            ]
+        );
+        assert_eq!(waits, vec![1]);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].doi, "10.1000/open");
+        assert_eq!(
+            outputs[0].availability,
+            vec![ScinetAvailability::OpenAccess]
+        );
+        assert!(outputs[0].path.is_none());
+        assert_eq!(outputs[1].doi, "10.1000/pending");
+        assert_eq!(outputs[1].path.as_deref(), Some("papers/pending.pdf"));
+    }
+
+    #[test]
     fn fetch_without_wait_reports_no_pdf_outputs() {
         let dois = vec!["10.1000/one".to_string()];
         let outputs = fetch_until_complete(
             &dois,
             false,
-            |_| Ok(FetchResult::NoPdf(RequestRemoteState::Pending)),
+            |_| {
+                Ok(FetchResult::NoPdf {
+                    remote_state: RequestRemoteState::Pending,
+                    availability: vec![ScinetAvailability::SciHub],
+                })
+            },
             |_| panic!("non-waiting fetch should not sleep"),
         )
         .unwrap();
@@ -1026,6 +1104,7 @@ mod tests {
         assert_eq!(outputs[0].doi, "10.1000/one");
         assert!(matches!(outputs[0].status, FetchOutputStatus::NoPdf));
         assert_eq!(outputs[0].remote_state, RequestRemoteState::Pending);
+        assert_eq!(outputs[0].availability, vec![ScinetAvailability::SciHub]);
         assert!(outputs[0].path.is_none());
     }
 
@@ -1036,12 +1115,14 @@ mod tests {
                 doi: "10.1000/one".to_string(),
                 status: FetchOutputStatus::Fetched,
                 remote_state: RequestRemoteState::Pdf,
+                availability: Vec::new(),
                 path: Some("papers/one.pdf".to_string()),
             },
             FetchOutput {
                 doi: "10.1000/two".to_string(),
                 status: FetchOutputStatus::NoPdf,
                 remote_state: RequestRemoteState::Working,
+                availability: vec![ScinetAvailability::OpenAccess, ScinetAvailability::SciHub],
                 path: None,
             },
         ];
@@ -1051,7 +1132,7 @@ mod tests {
             lines,
             vec![
                 "papers/one.pdf".to_string(),
-                "no-pdf\tworking\t10.1000/two".to_string()
+                "no-pdf\tworking\t10.1000/two\tavailability=open-access,sci-hub".to_string()
             ]
         );
     }

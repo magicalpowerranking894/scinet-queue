@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added Sci-Net open-access and Sci-Hub availability hints to `fetch` output
+  when no request-page PDF is downloadable.
 - Clarified `login --no-wait` terminal guidance and Sci-Net-visible PDF fetch
   behavior.
 - Fixed text output for mixed batch fetches so pending DOIs stay visible when

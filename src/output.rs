@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::queue::QueueStatus;
-use crate::scinet::{RequestRemoteState, ScinetResponse};
+use crate::scinet::{RequestRemoteState, ScinetAvailability, ScinetResponse};
 
 pub(crate) fn format_response(response: &ScinetResponse) -> Result<String, String> {
     serde_json::to_string_pretty(response).map_err(|error| error.to_string())
@@ -96,6 +96,7 @@ pub(crate) struct FetchOutput {
     pub(crate) doi: String,
     pub(crate) status: FetchOutputStatus,
     pub(crate) remote_state: RequestRemoteState,
+    pub(crate) availability: Vec<ScinetAvailability>,
     pub(crate) path: Option<String>,
 }
 
@@ -152,12 +153,14 @@ mod tests {
             doi: "10.1000/snq-example".to_string(),
             status: FetchOutputStatus::NoPdf,
             remote_state: RequestRemoteState::Working,
+            availability: vec![ScinetAvailability::SciHub],
             path: None,
         };
         let value = serde_json::to_value(output).unwrap();
 
         assert_eq!(value["status"], "no-pdf");
         assert_eq!(value["remote_state"], "working");
+        assert_eq!(value["availability"], serde_json::json!(["sci-hub"]));
         assert!(value["path"].is_null());
     }
 }

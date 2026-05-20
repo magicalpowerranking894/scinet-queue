@@ -128,11 +128,13 @@ snq fetch 10.1000/snq-example --out papers
 snq fetch --out papers
 ```
 
-`snq fetch` downloads PDFs that are visible on Sci-Net request pages. It does
-not search publisher pages or open-access repositories itself, so a DOI can be
-open elsewhere and still report `no-pdf` or `pending` in `snq`.
+When Sci-Net reports open-access or Sci-Hub availability but no request-page PDF
+is downloadable yet, `snq fetch` reports that availability instead of treating
+the DOI as simply pending. `snq` does not download from publisher pages,
+open-access repositories, or Sci-Hub itself.
 
-Keep polling until every targeted DOI has a PDF:
+Keep polling until every targeted DOI has a downloadable request-page PDF or a
+Sci-Net availability hint:
 
 ```sh
 snq fetch --wait --poll 30 --out papers
@@ -199,6 +201,7 @@ Example `snq fetch --json` output:
     "doi": "10.1000/snq-example",
     "status": "no-pdf",
     "remote_state": "working",
+    "availability": ["open-access", "sci-hub"],
     "path": null
   }
 ]

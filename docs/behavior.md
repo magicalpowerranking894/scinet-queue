@@ -34,9 +34,12 @@ not start a browser session.
 
 `snq fetch` downloads the first detected PDF link with the managed session and
 marks the queue entry `fetched` after validating the file header. With
-`--wait`, batch fetches keep polling until every targeted DOI has been fetched.
-`fetch` follows Sci-Net-visible PDF links only; it does not independently search
-publishers, repositories, or other open-access sources.
+`--wait`, batch fetches keep polling until every targeted DOI has been fetched
+or Sci-Net reports another availability path.
+When no request-page PDF is visible, `fetch` also checks Sci-Net search
+availability and reports `open-access` and `sci-hub` hints where Sci-Net exposes
+them. It does not independently search or download from publishers,
+repositories, or Sci-Hub.
 
 `snq approve` is local review state. It requires a fetched queue entry unless
 `--force` is passed.

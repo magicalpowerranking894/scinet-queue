@@ -31,6 +31,13 @@ pub(crate) struct RequestView {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub(crate) enum ScinetAvailability {
+    OpenAccess,
+    SciHub,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum RequestRemoteState {
     LoggedOut,
     Pdf,
@@ -134,6 +141,16 @@ impl ScinetResponse {
 
         None
     }
+
+    pub(crate) fn availability(&self) -> Vec<ScinetAvailability> {
+        if !self.ok || self.status >= 400 || self.logical_error().is_some() {
+            return Vec::new();
+        }
+
+        let mut availability = Vec::new();
+        collect_availability(None, &self.body, &mut availability);
+        availability
+    }
 }
 
 fn looks_like_login_text(text: &str) -> bool {
@@ -156,6 +173,160 @@ impl RequestRemoteState {
             RequestRemoteState::Working => "working",
             RequestRemoteState::Pending => "pending",
         }
+    }
+}
+
+impl ScinetAvailability {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ScinetAvailability::OpenAccess => "open-access",
+            ScinetAvailability::SciHub => "sci-hub",
+        }
+    }
+}
+
+fn collect_availability(
+    key: Option<&str>,
+    value: &Value,
+    availability: &mut Vec<ScinetAvailability>,
+) {
+    if let Some(kind) = key
+        .and_then(availability_key)
+        .filter(|_| value_is_present(value))
+    {
+        push_availability(availability, kind);
+    }
+
+    match value {
+        Value::Object(map) => {
+            if map.get("available").is_some_and(value_is_present) {
+                collect_available_object_labels(map, availability);
+            }
+
+            for (key, value) in map {
+                collect_availability(Some(key), value, availability);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_availability(None, value, availability);
+            }
+        }
+        Value::Bool(true) => {
+            if let Some(key) = key {
+                collect_availability_text(key, availability);
+            }
+        }
+        Value::String(text) => {
+            collect_availability_text(text, availability);
+        }
+        _ => {}
+    }
+}
+
+fn collect_available_object_labels(
+    map: &serde_json::Map<String, Value>,
+    availability: &mut Vec<ScinetAvailability>,
+) {
+    for (key, value) in map {
+        if let Some(kind) = availability_key(key) {
+            push_availability(availability, kind);
+        }
+
+        if let Value::String(text) = value {
+            collect_provider_label(text, availability);
+        }
+    }
+}
+
+fn collect_provider_label(text: &str, availability: &mut Vec<ScinetAvailability>) {
+    let text = text.to_ascii_lowercase();
+
+    if text.contains("open access") || text.contains("open-access") || text.contains("openaccess") {
+        push_availability(availability, ScinetAvailability::OpenAccess);
+    }
+
+    if text.contains("sci-hub") || text.contains("scihub") || text.contains("sci_hub") {
+        push_availability(availability, ScinetAvailability::SciHub);
+    }
+}
+
+fn availability_key(key: &str) -> Option<ScinetAvailability> {
+    let key = key.to_ascii_lowercase();
+
+    if key.contains("openaccess")
+        || key.contains("open_access")
+        || key.contains("open-access")
+        || key.contains("open access")
+    {
+        return Some(ScinetAvailability::OpenAccess);
+    }
+
+    if key.contains("scihub") || key.contains("sci_hub") || key.contains("sci-hub") {
+        return Some(ScinetAvailability::SciHub);
+    }
+
+    None
+}
+
+fn value_is_present(value: &Value) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        Value::String(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty()
+                && value != "false"
+                && value != "none"
+                && !value.contains("not found")
+                && !value.contains("unavailable")
+        }
+        Value::Array(values) => values.iter().any(value_is_present),
+        Value::Object(map) => map.values().any(value_is_present),
+        _ => false,
+    }
+}
+
+fn push_availability(availability: &mut Vec<ScinetAvailability>, kind: ScinetAvailability) {
+    if !availability.contains(&kind) {
+        availability.push(kind);
+    }
+}
+
+fn collect_availability_text(text: &str, availability: &mut Vec<ScinetAvailability>) {
+    let text = text.to_ascii_lowercase();
+
+    if (text.contains("open access")
+        || text.contains("open-access")
+        || text.contains("openaccess")
+        || text.contains("open_access"))
+        && (text.contains("available")
+            || text.contains("found")
+            || text.contains("download")
+            || text.contains("http"))
+        && !text.contains("no open access")
+        && !text.contains("open access not")
+        && !text.contains("open-access not")
+        && !text.contains("openaccess not")
+        && !text.contains("open_access not")
+        && !availability.contains(&ScinetAvailability::OpenAccess)
+    {
+        push_availability(availability, ScinetAvailability::OpenAccess);
+    }
+
+    if (text.contains("sci-hub") || text.contains("scihub") || text.contains("sci_hub"))
+        && (text.contains("available")
+            || text.contains("found")
+            || text.contains("download")
+            || text.contains("http"))
+        && !text.contains("no sci-hub")
+        && !text.contains("no scihub")
+        && !text.contains("no sci_hub")
+        && !text.contains("sci-hub not")
+        && !text.contains("scihub not")
+        && !text.contains("sci_hub not")
+        && !availability.contains(&ScinetAvailability::SciHub)
+    {
+        push_availability(availability, ScinetAvailability::SciHub);
     }
 }
 
@@ -452,6 +623,72 @@ mod tests {
         };
 
         assert!(response.logical_error().is_some());
+    }
+
+    #[test]
+    fn detects_scinet_availability_from_search_response() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "open_access": true,
+                "providers": [
+                    { "name": "Sci-Hub", "available": true },
+                    { "label": "publisher", "note": "Open Access version found" }
+                ],
+                "openaccess": "https://ojs.aaai.org/index.php/AAAI/article/download/33658/35813"
+            }),
+        };
+
+        assert_eq!(
+            response.availability(),
+            vec![ScinetAvailability::OpenAccess, ScinetAvailability::SciHub]
+        );
+    }
+
+    #[test]
+    fn ignores_negative_availability_text() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "message": "No open access match. Sci-Hub not found.",
+                "open_access": false,
+                "sci_hub": false
+            }),
+        };
+
+        assert!(response.availability().is_empty());
+    }
+
+    #[test]
+    fn ignores_unavailable_provider_labels() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "providers": [
+                    { "name": "Sci-Hub", "available": false },
+                    { "name": "Open Access", "available": false }
+                ]
+            }),
+        };
+
+        assert!(response.availability().is_empty());
+    }
+
+    #[test]
+    fn ignores_failed_availability_responses() {
+        let response = ScinetResponse {
+            ok: false,
+            status: 500,
+            body: json!({
+                "openaccess": "https://example.test/paper.pdf",
+                "sci_hub": true
+            }),
+        };
+
+        assert!(response.availability().is_empty());
     }
 
     #[test]
