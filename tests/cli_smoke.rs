@@ -244,6 +244,38 @@ fn fetch_json_prints_empty_array_for_empty_queue() {
 }
 
 #[test]
+fn watch_json_skips_inactive_entries_without_browser() {
+    let dir = temp_workspace("watch-inactive-json");
+
+    let add = snq()
+        .current_dir(&dir)
+        .args(["add", "10.1000/snq-example"])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+
+    let approve = snq()
+        .current_dir(&dir)
+        .args(["approve", "10.1000/snq-example", "--force"])
+        .output()
+        .unwrap();
+    assert!(approve.status.success());
+
+    let watch = snq()
+        .current_dir(&dir)
+        .env("SCINET_QUEUE_BROWSER", dir.join("missing-browser"))
+        .args(["watch", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(watch.status.success());
+    assert_eq!(String::from_utf8_lossy(&watch.stdout), "[]\n");
+    assert!(watch.stderr.is_empty());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn approve_json_marks_entry_approved() {
     let dir = temp_workspace("approve-json");
 

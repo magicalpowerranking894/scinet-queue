@@ -108,7 +108,7 @@ snq request --all --reward 1
 
 If `--reward` is omitted, `snq` uses `1`.
 
-Watch queued requests for visible PDF uploads:
+Watch requested and working entries for visible PDF uploads:
 
 ```sh
 snq watch
@@ -128,7 +128,7 @@ snq fetch 10.1000/snq-example --out papers
 snq fetch --out papers
 ```
 
-Keep polling until a PDF appears:
+Keep polling until every targeted DOI has a PDF:
 
 ```sh
 snq fetch --wait --poll 30 --out papers

@@ -28,8 +28,13 @@ Observed request page states:
 
 ## Fetch And Approval
 
+`snq watch` checks requested and working queue entries. It skips queued,
+fetched, and approved entries so completed or not-yet-requested local state does
+not start a browser session.
+
 `snq fetch` downloads the first detected PDF link with the managed session and
-marks the queue entry `fetched` after validating the file header.
+marks the queue entry `fetched` after validating the file header. With
+`--wait`, batch fetches keep polling until every targeted DOI has been fetched.
 
 `snq approve` is local review state. It requires a fetched queue entry unless
 `--force` is passed.

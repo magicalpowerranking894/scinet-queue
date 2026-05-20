@@ -23,7 +23,8 @@ use crate::papers::{
     FetchResult, extract_dois, fetch_dois, fetch_one, read_import_text, update_status_from_remote,
 };
 use crate::queue::{
-    AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
+    AddResult, Queue, QueueEntry, QueueStatus, RemoveResult, StatusResult, default_queue_path,
+    normalize_doi,
 };
 use crate::scinet::{
     RequestRemoteState, RequestView, SCINET_URL, ScinetResponse, probe_current_session,
@@ -320,13 +321,13 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("watch") => {
             let json = parse_json_flag("watch", args)?;
-            let entries = queue.list().map_err(|error| error.to_string())?;
+            let entries = watch_entries(queue.list().map_err(|error| error.to_string())?);
 
             if entries.is_empty() {
                 if json {
                     print_json(&Vec::<WatchOutput>::new())?;
                 } else {
-                    println!("queue empty");
+                    println!("no active entries");
                 }
                 return Ok(());
             }
@@ -403,42 +404,25 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             }
 
             let outputs = with_scinet_page(!fetch.json, |page| {
-                loop {
-                    let mut outputs = Vec::new();
-                    let mut fetched_any = false;
-
-                    for doi in &dois {
-                        match fetch_one(&queue, page, doi, &fetch.out_dir) {
-                            Ok(FetchResult::Fetched(path)) => {
-                                fetched_any = true;
-                                outputs.push(FetchOutput {
-                                    doi: doi.clone(),
-                                    status: FetchOutputStatus::Fetched,
-                                    remote_state: RequestRemoteState::Pdf,
-                                    path: Some(path.display().to_string()),
-                                });
-                            }
-                            Ok(FetchResult::NoPdf(remote_state)) => outputs.push(FetchOutput {
-                                doi: doi.clone(),
-                                status: FetchOutputStatus::NoPdf,
-                                remote_state,
-                                path: None,
-                            }),
-                            Err(error) => return Err(error),
+                fetch_until_complete(
+                    &dois,
+                    fetch.wait,
+                    |doi| fetch_one(&queue, page, doi, &fetch.out_dir),
+                    |remaining| {
+                        if fetch.json {
+                            eprintln!(
+                                "waiting for {remaining} PDF(s); next poll in {}s",
+                                fetch.poll_secs
+                            );
+                        } else {
+                            println!(
+                                "waiting for {remaining} PDF(s); next poll in {}s",
+                                fetch.poll_secs
+                            );
                         }
-                    }
-
-                    if fetched_any || !fetch.wait {
-                        return Ok(outputs);
-                    }
-
-                    if fetch.json {
-                        eprintln!("no PDFs available; waiting {}s", fetch.poll_secs);
-                    } else {
-                        println!("no PDFs available; waiting {}s", fetch.poll_secs);
-                    }
-                    thread::sleep(Duration::from_secs(fetch.poll_secs));
-                }
+                        thread::sleep(Duration::from_secs(fetch.poll_secs));
+                    },
+                )
             })?;
 
             if fetch.json {
@@ -714,6 +698,61 @@ fn request_dois(queue: &Queue, request: &RequestArgs) -> Result<Vec<String>, Str
         .collect())
 }
 
+fn watch_entries(entries: Vec<QueueEntry>) -> Vec<QueueEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| matches!(entry.status, QueueStatus::Requested | QueueStatus::Working))
+        .collect()
+}
+
+fn fetch_until_complete<F, W>(
+    dois: &[String],
+    wait: bool,
+    mut fetch: F,
+    mut wait_for_next_poll: W,
+) -> Result<Vec<FetchOutput>, String>
+where
+    F: FnMut(&str) -> Result<FetchResult, String>,
+    W: FnMut(usize),
+{
+    let mut pending = dois.to_vec();
+    let mut outputs = Vec::new();
+
+    loop {
+        let mut next_pending = Vec::new();
+
+        for doi in pending {
+            match fetch(&doi)? {
+                FetchResult::Fetched(path) => outputs.push(FetchOutput {
+                    doi,
+                    status: FetchOutputStatus::Fetched,
+                    remote_state: RequestRemoteState::Pdf,
+                    path: Some(path.display().to_string()),
+                }),
+                FetchResult::NoPdf(remote_state) => {
+                    if wait {
+                        next_pending.push(doi);
+                    } else {
+                        outputs.push(FetchOutput {
+                            doi,
+                            status: FetchOutputStatus::NoPdf,
+                            remote_state,
+                            path: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        if !wait || next_pending.is_empty() {
+            return Ok(outputs);
+        }
+
+        wait_for_next_poll(next_pending.len());
+        pending = next_pending;
+    }
+}
+
 fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
     match queue
         .set_status(doi, QueueStatus::Requested)
@@ -849,6 +888,113 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn watch_targets_only_requested_and_working_entries() {
+        let now = 1;
+        let entries = vec![
+            QueueEntry {
+                doi: "10.1000/queued".to_string(),
+                status: QueueStatus::Queued,
+                created_at: now,
+                updated_at: now,
+            },
+            QueueEntry {
+                doi: "10.1000/requested".to_string(),
+                status: QueueStatus::Requested,
+                created_at: now,
+                updated_at: now,
+            },
+            QueueEntry {
+                doi: "10.1000/working".to_string(),
+                status: QueueStatus::Working,
+                created_at: now,
+                updated_at: now,
+            },
+            QueueEntry {
+                doi: "10.1000/fetched".to_string(),
+                status: QueueStatus::Fetched,
+                created_at: now,
+                updated_at: now,
+            },
+            QueueEntry {
+                doi: "10.1000/approved".to_string(),
+                status: QueueStatus::Approved,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let active = watch_entries(entries)
+            .into_iter()
+            .map(|entry| entry.doi)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            active,
+            vec![
+                "10.1000/requested".to_string(),
+                "10.1000/working".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn fetch_wait_keeps_polling_until_all_targets_are_fetched() {
+        let dois = vec!["10.1000/one".to_string(), "10.1000/two".to_string()];
+        let mut calls = Vec::new();
+        let mut waits = Vec::new();
+
+        let outputs = fetch_until_complete(
+            &dois,
+            true,
+            |doi| {
+                calls.push(doi.to_string());
+
+                match (calls.len(), doi) {
+                    (1, "10.1000/one") => Ok(FetchResult::Fetched("papers/one.pdf".into())),
+                    (2, "10.1000/two") => Ok(FetchResult::NoPdf(RequestRemoteState::Working)),
+                    (3, "10.1000/two") => Ok(FetchResult::Fetched("papers/two.pdf".into())),
+                    _ => panic!("unexpected fetch call sequence: {calls:?}"),
+                }
+            },
+            |remaining| waits.push(remaining),
+        )
+        .unwrap();
+
+        assert_eq!(
+            calls,
+            vec![
+                "10.1000/one".to_string(),
+                "10.1000/two".to_string(),
+                "10.1000/two".to_string()
+            ]
+        );
+        assert_eq!(waits, vec![1]);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].doi, "10.1000/one");
+        assert_eq!(outputs[0].path.as_deref(), Some("papers/one.pdf"));
+        assert_eq!(outputs[1].doi, "10.1000/two");
+        assert_eq!(outputs[1].path.as_deref(), Some("papers/two.pdf"));
+    }
+
+    #[test]
+    fn fetch_without_wait_reports_no_pdf_outputs() {
+        let dois = vec!["10.1000/one".to_string()];
+        let outputs = fetch_until_complete(
+            &dois,
+            false,
+            |_| Ok(FetchResult::NoPdf(RequestRemoteState::Pending)),
+            |_| panic!("non-waiting fetch should not sleep"),
+        )
+        .unwrap();
+
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].doi, "10.1000/one");
+        assert!(matches!(outputs[0].status, FetchOutputStatus::NoPdf));
+        assert_eq!(outputs[0].remote_state, RequestRemoteState::Pending);
+        assert!(outputs[0].path.is_none());
     }
 
     #[test]

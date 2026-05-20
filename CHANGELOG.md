@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed batch `fetch --wait` so one available PDF does not stop polling for
+  the remaining targeted DOIs.
+- Limited `snq watch` to requested and working entries so inactive queue state
+  does not start a browser session.
 - Aligned managed login launch flags across browser engines to avoid Chromium
   keychain prompts and Firefox remote handoff.
 - Added a GitHub Actions release workflow for precompiled `snq` archives and
