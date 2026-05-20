@@ -24,14 +24,16 @@ pub(crate) fn extract_dois(text: &str) -> Vec<String> {
 
     for (start, _) in text.match_indices("10.") {
         let tail = &text[start..];
-        let raw = tail
+        let mut raw = tail
             .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\''))
             .next()
             .unwrap_or_default()
-            .split(['?', '#'])
-            .next()
-            .unwrap_or_default()
             .trim_end_matches(['.', ',', ';', ':', ')', ']', '}']);
+
+        if is_doi_url_context(text, start) {
+            raw = raw.split(['?', '#']).next().unwrap_or_default();
+        }
+
         let raw = trim_adjacent_doi(raw);
 
         let Ok(doi) = normalize_doi(raw) else {
@@ -44,6 +46,15 @@ pub(crate) fn extract_dois(text: &str) -> Vec<String> {
     }
 
     dois
+}
+
+fn is_doi_url_context(text: &str, start: usize) -> bool {
+    let prefix = text[..start].to_ascii_lowercase();
+
+    prefix.ends_with("https://doi.org/")
+        || prefix.ends_with("http://doi.org/")
+        || prefix.ends_with("https://dx.doi.org/")
+        || prefix.ends_with("http://dx.doi.org/")
 }
 
 fn trim_adjacent_doi(raw: &str) -> &str {
@@ -218,6 +229,22 @@ mod tests {
                 "10.1000/two".to_string(),
                 "10.1000/three".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn import_does_not_truncate_literal_query_or_fragment_suffixes() {
+        assert_eq!(
+            extract_dois("literal query 10.5555/foo?bar"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            extract_dois("literal fragment 10.6666/baz#frag"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            extract_dois("url https://doi.org/10.1000/ABC?utm_source=x#frag"),
+            vec!["10.1000/abc".to_string()]
         );
     }
 

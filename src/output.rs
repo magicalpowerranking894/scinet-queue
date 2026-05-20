@@ -37,7 +37,7 @@ Usage:
   snq list [--json]
   snq remove <doi>
   snq check <doi>
-  snq request <doi|--all> --reward <n> [--json]
+  snq request <doi|--all> [--reward <n>] [--json]
   snq watch [--json]
   snq view <doi> [--json]
   snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>]

@@ -34,7 +34,7 @@ Requires Rust 1.85 or newer.
 From GitHub:
 
 ```sh
-cargo install --locked --git https://github.com/tivris/scinet-queue
+cargo install --locked --git https://github.com/tivris/scinet-queue --tag v0.1.0
 ```
 
 From a local checkout:
@@ -146,6 +146,7 @@ prints the JSON response.
 
 `snq request <doi> --reward <n>` posts a Sci-Net request from the same session.
 `snq request --all --reward <n>` requests queued entries.
+If `--reward` is omitted, `snq` uses `1`.
 Pass `--json` for structured request results.
 
 `snq watch` checks queued requests for visible PDF uploads.
