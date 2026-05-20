@@ -1,15 +1,22 @@
+use std::env;
+use std::io::{self, IsTerminal, Write};
 use std::thread;
 use std::time::Duration;
 
 use crate::args::{
-    RequestArgs, parse_approve, parse_fetch, parse_json_flag, parse_login, parse_request,
-    parse_view,
+    BrowsersAction, RequestArgs, parse_approve, parse_browsers, parse_fetch, parse_json_flag,
+    parse_login, parse_request, parse_view,
 };
-use crate::browser::{detect_browser, profile_dir};
+use crate::browser::{
+    BROWSER_ENV, Browser, BrowserChoice, BrowserError, available_browser_candidates,
+    browser_choices, browser_from_path, browser_preference_exists, browser_preference_path,
+    clear_browser_preference, detect_browser, profile_dir, save_browser_preference,
+};
 use crate::doctor::{doctor_report, print_doctor_report};
 use crate::output::{
-    ApproveOutput, FetchOutput, FetchOutputStatus, RequestOutput, SessionOutput, ViewOutput,
-    WatchOutput, compact_text, format_response, print_help, print_json,
+    ApproveOutput, BrowserChoiceOutput, BrowserListOutput, FetchOutput, FetchOutputStatus,
+    RequestOutput, SessionOutput, ViewOutput, WatchOutput, compact_text, format_response,
+    print_help, print_json,
 };
 use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
 use crate::papers::{
@@ -120,7 +127,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("login") => {
             let login = parse_login(args)?;
-            let browser = detect_browser().map_err(|error| error.to_string())?;
+            let browser = detect_browser_or_prompt(true)?;
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
 
             if login.wait {
@@ -145,7 +152,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("session") => {
             let json = parse_json_flag("session", args)?;
-            let browser = detect_browser().map_err(|error| error.to_string())?;
+            let browser = detect_browser_or_prompt(!json)?;
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
             let session_browser = browser
                 .launch_session(&profile_dir, true)
@@ -185,6 +192,52 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 }
             );
         }
+        Some("browsers") => {
+            let browser_args = parse_browsers(args)?;
+            let print_list = !matches!(&browser_args.action, BrowsersAction::Clear);
+
+            match browser_args.action {
+                BrowsersAction::List => {}
+                BrowsersAction::Pick => {
+                    let browser = prompt_browser_choice()?;
+                    eprintln!(
+                        "saved browser preference {}",
+                        browser_preference_path().display()
+                    );
+                    eprintln!("selected {} {}", browser.engine, browser.path.display());
+                }
+                BrowsersAction::Set(path) => {
+                    let browser = browser_from_path(path).map_err(|error| error.to_string())?;
+                    save_browser_preference(&browser).map_err(|error| error.to_string())?;
+
+                    if !browser_args.json {
+                        println!("browser preference saved");
+                    }
+                }
+                BrowsersAction::Clear => {
+                    let removed = clear_browser_preference().map_err(|error| error.to_string())?;
+
+                    if !browser_args.json {
+                        if removed {
+                            println!("browser preference cleared");
+                        } else {
+                            println!("browser preference not set");
+                        }
+                    }
+                }
+            }
+
+            let output = browser_list_output();
+
+            if browser_args.json {
+                print_json(&output)?;
+                return Ok(());
+            }
+
+            if print_list {
+                print_browser_list(&output);
+            }
+        }
         Some("check") => {
             let mut doi = None;
 
@@ -207,7 +260,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let Some(doi) = doi else {
                 return Err("check: missing DOI".to_string());
             };
-            let response = with_scinet_session(|page| search_doi(page, SCINET_URL, &doi))?;
+            let response = with_scinet_session(false, |page| search_doi(page, SCINET_URL, &doi))?;
             let json = format_response(&response)?;
 
             println!("{json}");
@@ -226,7 +279,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
 
-            let responses = with_scinet_page(|page| {
+            let responses = with_scinet_page(!request.json, |page| {
                 let mut responses = Vec::new();
 
                 for doi in &dois {
@@ -278,7 +331,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
 
-            let views = with_scinet_views(entries.iter().map(|entry| entry.doi.as_str()))?;
+            let views = with_scinet_views(entries.iter().map(|entry| entry.doi.as_str()), !json)?;
             let mut output = Vec::new();
 
             for (entry, view) in entries.iter().zip(views.iter()) {
@@ -307,7 +360,8 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("view") => {
             let view_args = parse_view(args)?;
-            let mut views = with_scinet_views(std::iter::once(view_args.doi.as_str()))?;
+            let mut views =
+                with_scinet_views(std::iter::once(view_args.doi.as_str()), !view_args.json)?;
             let view = views.remove(0);
             let state = view.remote_state();
             let output = ViewOutput {
@@ -348,7 +402,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
 
-            let outputs = with_scinet_page(|page| {
+            let outputs = with_scinet_page(!fetch.json, |page| {
                 loop {
                     let mut outputs = Vec::new();
                     let mut fetched_any = false;
@@ -444,11 +498,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn with_scinet_session<F>(operation: F) -> Result<ScinetResponse, String>
+fn with_scinet_session<F>(interactive: bool, operation: F) -> Result<ScinetResponse, String>
 where
     F: FnOnce(&mut BrowserPageSession) -> Result<ScinetResponse, PageError>,
 {
-    with_scinet_page(|page| {
+    with_scinet_page(interactive, |page| {
         let response = operation(page).map_err(|error| error.to_string())?;
 
         if response.looks_logged_out() {
@@ -459,11 +513,146 @@ where
     })
 }
 
-fn with_scinet_page<F, T>(operation: F) -> Result<T, String>
+fn browser_list_output() -> BrowserListOutput {
+    let browsers = browser_choices()
+        .into_iter()
+        .map(browser_choice_output)
+        .collect::<Vec<_>>();
+    let selected = browsers.iter().find(|browser| browser.selected).cloned();
+
+    BrowserListOutput {
+        override_env: BROWSER_ENV.to_string(),
+        preference_path: browser_preference_path().display().to_string(),
+        selected,
+        browsers,
+    }
+}
+
+fn browser_choice_output(choice: BrowserChoice) -> BrowserChoiceOutput {
+    BrowserChoiceOutput {
+        selected: choice.selected,
+        available: choice.available,
+        engine: choice.engine.to_string(),
+        source: choice.source.to_string(),
+        path: choice.path.display().to_string(),
+    }
+}
+
+fn print_browser_list(output: &BrowserListOutput) {
+    if output.browsers.is_empty() {
+        println!("no supported browsers found");
+        println!("override {BROWSER_ENV}=/path/to/browser");
+        return;
+    }
+
+    for browser in &output.browsers {
+        let marker = if browser.selected { "*" } else { " " };
+        let availability = if browser.available {
+            "available"
+        } else {
+            "missing"
+        };
+
+        println!(
+            "{marker}\t{}\t{}\t{}\t{}",
+            browser.engine, browser.source, availability, browser.path
+        );
+    }
+
+    println!("preference {}", browser_preference_path().display());
+    println!("override {BROWSER_ENV}=/path/to/browser");
+}
+
+fn detect_browser_or_prompt(interactive: bool) -> Result<Browser, String> {
+    if env::var_os(BROWSER_ENV).is_some() {
+        return detect_browser().map_err(|error| error.to_string());
+    }
+
+    match detect_browser() {
+        Ok(browser) => {
+            if interactive && !browser_preference_exists() && can_prompt() {
+                let candidates = available_browser_candidates();
+
+                if candidates.len() > 1 {
+                    return prompt_browser_choice();
+                }
+            }
+
+            Ok(browser)
+        }
+        Err(BrowserError::PreferenceBrowserNotFound(path)) if interactive && can_prompt() => {
+            eprintln!("configured browser is missing: {}", path.display());
+            prompt_browser_choice()
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn can_prompt() -> bool {
+    io::stdin().is_terminal() && io::stderr().is_terminal()
+}
+
+fn prompt_browser_choice() -> Result<Browser, String> {
+    if env::var_os(BROWSER_ENV).is_some() {
+        return Err(format!(
+            "{BROWSER_ENV} is set; unset it before choosing a saved browser preference"
+        ));
+    }
+
+    let browsers = available_browser_candidates();
+
+    if browsers.is_empty() {
+        return Err("no supported browsers found".to_string());
+    }
+
+    if browsers.len() == 1 {
+        let browser = browsers[0].clone();
+        save_browser_preference(&browser).map_err(|error| error.to_string())?;
+        return Ok(browser);
+    }
+
+    eprintln!("choose browser for this workspace:");
+
+    for (index, browser) in browsers.iter().enumerate() {
+        eprintln!(
+            "  {}. {}\t{}",
+            index + 1,
+            browser.engine,
+            browser.path.display()
+        );
+    }
+
+    loop {
+        eprint!("browser [1-{}]: ", browsers.len());
+        io::stderr().flush().map_err(|error| error.to_string())?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|error| error.to_string())?;
+
+        let selection = input.trim();
+        let Ok(index) = selection.parse::<usize>() else {
+            eprintln!("enter a number from 1 to {}", browsers.len());
+            continue;
+        };
+
+        if !(1..=browsers.len()).contains(&index) {
+            eprintln!("enter a number from 1 to {}", browsers.len());
+            continue;
+        }
+
+        let browser = browsers[index - 1].clone();
+        save_browser_preference(&browser).map_err(|error| error.to_string())?;
+        return Ok(browser);
+    }
+}
+
+fn with_scinet_page<F, T>(interactive: bool, operation: F) -> Result<T, String>
 where
     F: FnOnce(&mut BrowserPageSession) -> Result<T, String>,
 {
-    let browser = detect_browser().map_err(|error| error.to_string())?;
+    let browser = detect_browser_or_prompt(interactive)?;
     let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
     let session_browser = browser
         .launch_session(&profile_dir, true)
@@ -479,8 +668,11 @@ where
     operation(&mut page)
 }
 
-fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<RequestView>, String> {
-    with_scinet_page(|page| {
+fn with_scinet_views<'a>(
+    dois: impl Iterator<Item = &'a str>,
+    interactive: bool,
+) -> Result<Vec<RequestView>, String> {
+    with_scinet_page(interactive, |page| {
         let mut views = Vec::new();
 
         for doi in dois {

@@ -132,6 +132,7 @@ Agent-facing JSON is available for commands that need structured output:
 
 ```sh
 snq session --json
+snq browsers --json
 snq list --json
 snq request --all --reward 1 --json
 snq watch --json
@@ -205,7 +206,43 @@ The browser support model is engine/protocol oriented:
 | Firefox/Gecko-based | WebDriver BiDi | Supported |
 
 `snq` discovers a compatible browser on the system. To choose a specific
-browser binary, set:
+browser binary for the current workspace, run:
+
+```sh
+snq browsers --pick
+```
+
+For scripts or agents, set the path explicitly:
+
+```sh
+snq browsers --set /path/to/browser
+```
+
+The preference is stored in `.snq/browser.json`. It is local to the current
+workspace, checked every time it is used, and can be removed with:
+
+```sh
+snq browsers --clear
+```
+
+Selection order is:
+
+1. `SCINET_QUEUE_BROWSER`, when set.
+2. `.snq/browser.json`, when present and valid.
+3. The first discovered compatible browser.
+
+If more than one compatible browser is available and no preference exists,
+interactive authenticated commands ask once and save the answer. JSON and
+noninteractive paths do not prompt.
+
+To inspect discovery and the active selection, run:
+
+```sh
+snq browsers
+snq browsers --json
+```
+
+To override everything without writing `.snq/browser.json`, set:
 
 ```sh
 SCINET_QUEUE_BROWSER=/path/to/browser
@@ -252,6 +289,7 @@ The queue is plain and inspectable:
 
 ```text
 .snq/
+  browser.json
   queue.jsonl
   queue.lock
 papers/

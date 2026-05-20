@@ -32,6 +32,7 @@ A tiny agent-friendly DOI queue for Sci-Net.
 Usage:
   snq login
   snq session [--json]
+  snq browsers [--pick|--set <path>|--clear] [--json]
   snq add <doi>...
   snq import <path|->
   snq list [--json]
@@ -62,6 +63,23 @@ pub(crate) struct SessionOutput {
     pub(crate) url: String,
     pub(crate) title: String,
     pub(crate) logged_in: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BrowserListOutput {
+    pub(crate) override_env: String,
+    pub(crate) preference_path: String,
+    pub(crate) selected: Option<BrowserChoiceOutput>,
+    pub(crate) browsers: Vec<BrowserChoiceOutput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct BrowserChoiceOutput {
+    pub(crate) selected: bool,
+    pub(crate) available: bool,
+    pub(crate) engine: String,
+    pub(crate) source: String,
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Serialize)]

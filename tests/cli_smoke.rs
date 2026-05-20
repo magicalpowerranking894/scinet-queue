@@ -105,6 +105,127 @@ fn request_all_json_prints_empty_array_for_empty_queue() {
 }
 
 #[test]
+fn browsers_json_reports_env_override() {
+    let dir = temp_workspace("browsers-json");
+    let browser = dir.join("missing-browser");
+
+    let output = snq()
+        .current_dir(&dir)
+        .env("SCINET_QUEUE_BROWSER", &browser)
+        .args(["browsers", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["override_env"], "SCINET_QUEUE_BROWSER");
+    assert_eq!(value["preference_path"], ".snq/browser.json");
+    assert!(value["selected"].is_null());
+    assert_eq!(value["browsers"][0]["source"], "env");
+    assert_eq!(value["browsers"][0]["available"], false);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn browsers_set_saves_workspace_preference() {
+    let dir = temp_workspace("browsers-set");
+    let browser = dir.join("fake-firefox");
+    fs::write(&browser, "").unwrap();
+
+    let set = snq()
+        .current_dir(&dir)
+        .args(["browsers", "--set", browser.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(set.status.success());
+    assert!(set.stderr.is_empty());
+
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join(".snq/browser.json")).unwrap()).unwrap();
+    assert_eq!(value["engine"], "firefox");
+    assert_eq!(value["path"], browser.to_str().unwrap());
+
+    let output = snq()
+        .current_dir(&dir)
+        .args(["browsers", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["selected"]["source"], "preference");
+    assert_eq!(value["selected"]["path"], browser.to_str().unwrap());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn browsers_clear_removes_workspace_preference() {
+    let dir = temp_workspace("browsers-clear");
+    fs::create_dir_all(dir.join(".snq")).unwrap();
+    fs::write(
+        dir.join(".snq/browser.json"),
+        "{\"engine\":\"chromium\",\"path\":\"/missing\"}\n",
+    )
+    .unwrap();
+
+    let output = snq()
+        .current_dir(&dir)
+        .args(["browsers", "--clear"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "browser preference cleared\n"
+    );
+    assert!(!dir.join(".snq/browser.json").exists());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn missing_browser_preference_errors_before_launch() {
+    let dir = temp_workspace("missing-browser-preference");
+    let browser = dir.join("deleted-firefox");
+    fs::create_dir_all(dir.join(".snq")).unwrap();
+    fs::write(
+        dir.join(".snq/browser.json"),
+        format!(
+            "{{\"engine\":\"firefox\",\"path\":\"{}\"}}\n",
+            browser.display()
+        ),
+    )
+    .unwrap();
+
+    let output = snq()
+        .current_dir(&dir)
+        .args(["session", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("configured browser does not exist")
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn fetch_json_prints_empty_array_for_empty_queue() {
     let dir = temp_workspace("fetch-empty-json");
 

@@ -6,6 +6,18 @@ pub(crate) struct LoginArgs {
     pub(crate) wait: bool,
 }
 
+pub(crate) struct BrowsersArgs {
+    pub(crate) action: BrowsersAction,
+    pub(crate) json: bool,
+}
+
+pub(crate) enum BrowsersAction {
+    List,
+    Pick,
+    Set(PathBuf),
+    Clear,
+}
+
 pub(crate) struct RequestArgs {
     pub(crate) doi: Option<String>,
     pub(crate) reward: u32,
@@ -59,6 +71,43 @@ pub(crate) fn parse_login(args: impl Iterator<Item = String>) -> Result<LoginArg
     }
 
     Ok(LoginArgs { wait })
+}
+
+pub(crate) fn parse_browsers(args: impl Iterator<Item = String>) -> Result<BrowsersArgs, String> {
+    let mut action = BrowsersAction::List;
+    let mut json = false;
+    let mut args = args.peekable();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--pick" => set_browser_action(&mut action, BrowsersAction::Pick)?,
+            "--clear" => set_browser_action(&mut action, BrowsersAction::Clear)?,
+            "--set" => {
+                let Some(path) = args.next() else {
+                    return Err("browsers: missing value for --set".to_string());
+                };
+
+                set_browser_action(&mut action, BrowsersAction::Set(path.into()))?;
+            }
+            unknown => return Err(format!("browsers: unknown option `{unknown}`")),
+        }
+    }
+
+    if json && matches!(action, BrowsersAction::Pick) {
+        return Err("browsers: --pick cannot be used with --json".to_string());
+    }
+
+    Ok(BrowsersArgs { action, json })
+}
+
+fn set_browser_action(current: &mut BrowsersAction, next: BrowsersAction) -> Result<(), String> {
+    if matches!(current, BrowsersAction::List) {
+        *current = next;
+        Ok(())
+    } else {
+        Err("browsers: choose only one of --pick, --set, or --clear".to_string())
+    }
 }
 
 pub(crate) fn parse_request(args: impl Iterator<Item = String>) -> Result<RequestArgs, String> {
@@ -237,6 +286,43 @@ mod tests {
                 .wait
         );
         assert!(parse_login(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn browsers_accepts_json_and_preference_actions() {
+        assert!(matches!(
+            parse_browsers(["--json"].into_iter().map(str::to_string))
+                .unwrap()
+                .action,
+            BrowsersAction::List
+        ));
+
+        assert!(matches!(
+            parse_browsers(["--pick"].into_iter().map(str::to_string))
+                .unwrap()
+                .action,
+            BrowsersAction::Pick
+        ));
+
+        assert!(matches!(
+            parse_browsers(["--clear"].into_iter().map(str::to_string))
+                .unwrap()
+                .action,
+            BrowsersAction::Clear
+        ));
+
+        let args = parse_browsers(["--set", "browser"].into_iter().map(str::to_string)).unwrap();
+        assert!(
+            matches!(args.action, BrowsersAction::Set(path) if path == std::path::Path::new("browser"))
+        );
+    }
+
+    #[test]
+    fn browsers_rejects_ambiguous_or_non_scriptable_options() {
+        assert!(parse_browsers(["--set"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_browsers(["--set", "a", "--clear"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_browsers(["--pick", "--json"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_browsers(["--bad"].into_iter().map(str::to_string)).is_err());
     }
 
     #[test]

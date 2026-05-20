@@ -1,6 +1,7 @@
 use directories::ProjectDirs;
 #[cfg(not(windows))]
 use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -16,13 +17,40 @@ use std::time::{Duration, Instant};
 use crate::locks::lock_token;
 use crate::scinet::SCINET_URL;
 
-const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
+pub(crate) const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
+pub(crate) const BROWSER_PREFERENCE_FILE: &str = ".snq/browser.json";
 const PROFILE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const PROFILE_LOCK_POLL: Duration = Duration::from_millis(50);
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Browser {
     pub(crate) engine: BrowserEngine,
     pub(crate) path: PathBuf,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct BrowserChoice {
+    pub(crate) engine: BrowserEngine,
+    pub(crate) path: PathBuf,
+    pub(crate) source: BrowserChoiceSource,
+    pub(crate) available: bool,
+    pub(crate) selected: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum BrowserChoiceSource {
+    Env,
+    Preference,
+    Candidate,
+}
+
+impl fmt::Display for BrowserChoiceSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BrowserChoiceSource::Env => f.write_str("env"),
+            BrowserChoiceSource::Preference => f.write_str("preference"),
+            BrowserChoiceSource::Candidate => f.write_str("candidate"),
+        }
+    }
 }
 
 impl Browser {
@@ -243,7 +271,8 @@ impl Drop for BidiBrowser {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum BrowserEngine {
     Chromium,
     Firefox,
@@ -270,9 +299,12 @@ impl fmt::Display for BrowserEngine {
 #[derive(Debug)]
 pub(crate) enum BrowserError {
     Io(std::io::Error),
+    Json(serde_json::Error),
     NoProjectDirs,
     NoBrowserFound,
     EnvBrowserNotFound(PathBuf),
+    BrowserPathNotFound(PathBuf),
+    PreferenceBrowserNotFound(PathBuf),
     ProfileLocked(PathBuf),
     UnsupportedCdpEngine(BrowserEngine),
     UnsupportedBidiEngine(BrowserEngine),
@@ -286,14 +318,23 @@ impl fmt::Display for BrowserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BrowserError::Io(error) => write!(f, "{error}"),
+            BrowserError::Json(error) => write!(f, "{error}"),
             BrowserError::NoProjectDirs => write!(f, "could not resolve user data directory"),
             BrowserError::NoBrowserFound => write!(
                 f,
-                "no supported browser found; install Chrome, Chromium, Brave, Edge, or Firefox, or set {BROWSER_ENV}"
+                "no supported browser found; install a Chromium-compatible or Firefox/Gecko-based browser, or set {BROWSER_ENV}"
             ),
             BrowserError::EnvBrowserNotFound(path) => {
                 write!(f, "{BROWSER_ENV} does not exist: {}", path.display())
             }
+            BrowserError::BrowserPathNotFound(path) => {
+                write!(f, "browser path does not exist: {}", path.display())
+            }
+            BrowserError::PreferenceBrowserNotFound(path) => write!(
+                f,
+                "configured browser does not exist: {}; run `snq browsers --pick`, `snq browsers --set <path>`, or `snq browsers --clear`",
+                path.display()
+            ),
             BrowserError::ProfileLocked(path) => {
                 if cfg!(windows) {
                     write!(
@@ -343,6 +384,18 @@ impl From<std::io::Error> for BrowserError {
     }
 }
 
+impl From<serde_json::Error> for BrowserError {
+    fn from(error: serde_json::Error) -> Self {
+        BrowserError::Json(error)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BrowserPreference {
+    engine: BrowserEngine,
+    path: PathBuf,
+}
+
 pub(crate) fn detect_browser() -> Result<Browser, BrowserError> {
     if let Some(path) = env::var_os(BROWSER_ENV) {
         let path = PathBuf::from(path);
@@ -357,10 +410,139 @@ pub(crate) fn detect_browser() -> Result<Browser, BrowserError> {
         });
     }
 
+    if let Some(browser) = preferred_browser()? {
+        return Ok(browser);
+    }
+
     browser_candidates()
         .into_iter()
         .find_map(resolve_browser)
         .ok_or(BrowserError::NoBrowserFound)
+}
+
+pub(crate) fn browser_choices() -> Vec<BrowserChoice> {
+    if let Some(path) = env::var_os(BROWSER_ENV) {
+        let path = PathBuf::from(path);
+        let available = path.exists();
+
+        return vec![BrowserChoice {
+            engine: infer_engine(&path),
+            path,
+            source: BrowserChoiceSource::Env,
+            available,
+            selected: available,
+        }];
+    }
+
+    let mut choices = Vec::new();
+    let has_preference = match read_browser_preference() {
+        Ok(Some(preference)) => {
+            let available = preference.path.exists();
+            choices.push(BrowserChoice {
+                engine: preference.engine,
+                path: preference.path,
+                source: BrowserChoiceSource::Preference,
+                available,
+                selected: available,
+            });
+            true
+        }
+        Ok(None) | Err(_) => false,
+    };
+
+    for candidate in browser_candidates() {
+        let Some(browser) = resolve_browser(candidate) else {
+            continue;
+        };
+
+        if choices
+            .iter()
+            .any(|choice: &BrowserChoice| choice.path == browser.path)
+        {
+            continue;
+        }
+
+        choices.push(BrowserChoice {
+            engine: browser.engine,
+            path: browser.path,
+            source: BrowserChoiceSource::Candidate,
+            available: true,
+            selected: false,
+        });
+    }
+
+    if !has_preference {
+        if let Some(choice) = choices.first_mut() {
+            choice.selected = true;
+        }
+    }
+
+    choices
+}
+
+pub(crate) fn browser_preference_path() -> PathBuf {
+    PathBuf::from(BROWSER_PREFERENCE_FILE)
+}
+
+pub(crate) fn browser_preference_exists() -> bool {
+    browser_preference_path().exists()
+}
+
+pub(crate) fn browser_from_path(path: PathBuf) -> Result<Browser, BrowserError> {
+    let original_path = path.clone();
+    let browser = Browser {
+        engine: infer_engine(&path),
+        path,
+    };
+
+    resolve_browser(browser).ok_or(BrowserError::BrowserPathNotFound(original_path))
+}
+
+pub(crate) fn available_browser_candidates() -> Vec<Browser> {
+    let mut browsers = Vec::new();
+
+    for candidate in browser_candidates() {
+        let Some(browser) = resolve_browser(candidate) else {
+            continue;
+        };
+
+        if browsers
+            .iter()
+            .any(|candidate: &Browser| candidate.path == browser.path)
+        {
+            continue;
+        }
+
+        browsers.push(browser);
+    }
+
+    browsers
+}
+
+pub(crate) fn save_browser_preference(browser: &Browser) -> Result<(), BrowserError> {
+    let path = browser_preference_path();
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let preference = BrowserPreference {
+        engine: browser.engine,
+        path: browser.path.clone(),
+    };
+    let mut contents = serde_json::to_string_pretty(&preference)?;
+    contents.push('\n');
+    fs::write(path, contents)?;
+
+    Ok(())
+}
+
+pub(crate) fn clear_browser_preference() -> Result<bool, BrowserError> {
+    match fs::remove_file(browser_preference_path()) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(BrowserError::Io(error)),
+    }
 }
 
 pub(crate) fn profile_dir(engine: BrowserEngine) -> Result<PathBuf, BrowserError> {
@@ -383,6 +565,34 @@ fn infer_engine(path: &Path) -> BrowserEngine {
     } else {
         BrowserEngine::Chromium
     }
+}
+
+fn preferred_browser() -> Result<Option<Browser>, BrowserError> {
+    let Some(preference) = read_browser_preference()? else {
+        return Ok(None);
+    };
+
+    if !preference.path.exists() {
+        return Err(BrowserError::PreferenceBrowserNotFound(preference.path));
+    }
+
+    Ok(Some(Browser {
+        engine: preference.engine,
+        path: preference.path,
+    }))
+}
+
+fn read_browser_preference() -> Result<Option<BrowserPreference>, BrowserError> {
+    let path = browser_preference_path();
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(BrowserError::Io(error)),
+    };
+
+    serde_json::from_str(&contents)
+        .map(Some)
+        .map_err(BrowserError::Json)
 }
 
 fn resolve_browser(browser: Browser) -> Option<Browser> {
