@@ -1,4 +1,3 @@
-use std::env;
 use std::thread;
 use std::time::Duration;
 
@@ -24,8 +23,21 @@ use crate::scinet::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub fn run() -> Result<(), String> {
-    let mut args = env::args().skip(1);
+pub fn args_want_json(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--json")
+}
+
+pub fn run(args: Vec<String>) -> Result<(), String> {
+    if args
+        .get(1)
+        .map(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
+        .unwrap_or(false)
+    {
+        print_help(VERSION);
+        return Ok(());
+    }
+
+    let mut args = args.into_iter();
     let queue = Queue::new(default_queue_path());
 
     match args.next().as_deref() {
@@ -171,15 +183,27 @@ pub fn run() -> Result<(), String> {
             );
         }
         Some("check") => {
-            let Some(doi) = args.next() else {
-                return Err("check: missing DOI".to_string());
-            };
+            let mut doi = None;
 
-            if let Some(extra) = args.next() {
-                return Err(format!("check: unexpected argument `{extra}`"));
+            for arg in args {
+                match arg.as_str() {
+                    "--json" => {}
+                    value if value.starts_with('-') => {
+                        return Err(format!("check: unknown option `{value}`"));
+                    }
+                    value => {
+                        if doi.is_some() {
+                            return Err(format!("check: unexpected argument `{value}`"));
+                        }
+
+                        doi = Some(normalize_doi(value).map_err(|error| error.to_string())?);
+                    }
+                }
             }
 
-            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
+            let Some(doi) = doi else {
+                return Err("check: missing DOI".to_string());
+            };
             let response = with_scinet_session(|port| search_doi(port, SCINET_URL, &doi))?;
             let json = format_response(&response)?;
 
@@ -211,9 +235,11 @@ pub fn run() -> Result<(), String> {
                     }
 
                     ensure_request_ok(doi, &response)?;
-
-                    mark_requested(&queue, doi)?;
                     responses.push(response);
+                }
+
+                for doi in &dois {
+                    mark_requested(&queue, doi)?;
                 }
 
                 Ok(responses)

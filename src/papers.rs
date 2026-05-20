@@ -28,7 +28,11 @@ pub(crate) fn extract_dois(text: &str) -> Vec<String> {
             .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\''))
             .next()
             .unwrap_or_default()
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
             .trim_end_matches(['.', ',', ';', ':', ')', ']', '}']);
+        let raw = trim_adjacent_doi(raw);
 
         let Ok(doi) = normalize_doi(raw) else {
             continue;
@@ -40,6 +44,27 @@ pub(crate) fn extract_dois(text: &str) -> Vec<String> {
     }
 
     dois
+}
+
+fn trim_adjacent_doi(raw: &str) -> &str {
+    let bytes = raw.as_bytes();
+
+    for (index, ch) in raw.char_indices() {
+        if !matches!(ch, ',' | ';') {
+            continue;
+        }
+
+        let mut next = index + ch.len_utf8();
+        while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+            next += 1;
+        }
+
+        if raw[next..].starts_with("10.") {
+            return &raw[..index];
+        }
+    }
+
+    raw
 }
 
 pub(crate) fn fetch_dois(queue: &Queue, doi: Option<&str>) -> Result<Vec<String>, String> {
@@ -80,9 +105,8 @@ pub(crate) fn fetch_one(
 
     validate_pdf(&download.bytes)?;
 
-    let out_path = output_path(out_dir, doi, pdf_url);
-
     fs::create_dir_all(out_dir).map_err(|error| error.to_string())?;
+    let out_path = output_path(out_dir, doi, pdf_url);
     fs::write(&out_path, download.bytes).map_err(|error| error.to_string())?;
 
     match queue
@@ -105,7 +129,27 @@ fn validate_pdf(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn output_path(out_dir: &Path, doi: &str, pdf_url: &str) -> PathBuf {
-    out_dir.join(pdf_filename(doi, pdf_url))
+    let filename = pdf_filename(doi, pdf_url);
+    let candidate = out_dir.join(&filename);
+
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let (stem, extension) = filename
+        .rsplit_once('.')
+        .map(|(stem, extension)| (stem.to_string(), format!(".{extension}")))
+        .unwrap_or((filename, String::new()));
+
+    for index in 2.. {
+        let candidate = out_dir.join(format!("{stem}-{index}{extension}"));
+
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded filename suffix search cannot exhaust")
 }
 
 fn pdf_filename(doi: &str, pdf_url: &str) -> String {
@@ -166,6 +210,18 @@ mod tests {
     }
 
     #[test]
+    fn extracts_adjacent_separator_delimited_dois() {
+        assert_eq!(
+            extract_dois("10.1000/one,10.1000/two;10.1000/three"),
+            vec![
+                "10.1000/one".to_string(),
+                "10.1000/two".to_string(),
+                "10.1000/three".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn pdf_validation_rejects_non_pdf_bytes() {
         assert!(validate_pdf(b"%PDF-1.7\n").is_ok());
         assert!(validate_pdf(b"<html>").is_err());
@@ -195,5 +251,21 @@ mod tests {
             pdf_filename("10.1287/mnsc.2024.05040", "https://sci-net.xyz/view/x"),
             "10.1287-mnsc.2024.05040.pdf"
         );
+    }
+
+    #[test]
+    fn output_path_avoids_existing_files() {
+        let dir = std::env::temp_dir().join(format!("snq-output-path-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("paper.pdf"), b"%PDF-1.7\n").unwrap();
+        fs::write(dir.join("paper-2.pdf"), b"%PDF-1.7\n").unwrap();
+
+        assert_eq!(
+            output_path(&dir, "10.1000/one", "https://x/paper.pdf"),
+            dir.join("paper-3.pdf")
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

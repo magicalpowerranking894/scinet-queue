@@ -5,14 +5,14 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
+use crate::locks::{lock_token, owner_lock_file_can_be_reclaimed};
 use crate::scinet::SCINET_URL;
 
 const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
-static LOCK_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(0);
+const PROFILE_LOCK_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Browser {
@@ -334,21 +334,33 @@ impl ProfileLock {
     fn acquire(profile_dir: &Path) -> Result<Self, BrowserError> {
         let path = profile_dir.join(".snq-profile.lock");
         let token = lock_token();
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    BrowserError::ProfileLocked(path.clone())
-                } else {
-                    BrowserError::Io(error)
+
+        let mut file = loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => break file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if owner_lock_file_can_be_reclaimed(&path, PROFILE_LOCK_STALE_AFTER) {
+                        match fs::remove_file(&path) {
+                            Ok(()) => continue,
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                continue;
+                            }
+                            Err(error) => return Err(BrowserError::Io(error)),
+                        }
+                    }
+
+                    return Err(BrowserError::ProfileLocked(path.clone()));
                 }
-            })?;
+                Err(error) => return Err(BrowserError::Io(error)),
+            }
+        };
 
         writeln!(file, "{token}")?;
         file.sync_all()?;
-
         Ok(Self { path, token })
     }
 }
@@ -359,11 +371,6 @@ impl Drop for ProfileLock {
     }
 }
 
-fn lock_token() -> String {
-    let counter = LOCK_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}:{}:{counter}", std::process::id(), unix_time_millis())
-}
-
 fn remove_lock_if_owned(path: &Path, token: &str) {
     if fs::read_to_string(path)
         .map(|contents| contents.trim() == token)
@@ -371,13 +378,6 @@ fn remove_lock_if_owned(path: &Path, token: &str) {
     {
         let _ = fs::remove_file(path);
     }
-}
-
-fn unix_time_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
 }
 
 #[cfg(target_os = "macos")]

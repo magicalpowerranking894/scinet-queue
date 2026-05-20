@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::locks::lock_token;
+#[cfg(windows)]
+use crate::locks::owner_lock_file_can_be_reclaimed;
+
 const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const QUEUE_LOCK_POLL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
@@ -255,31 +259,52 @@ pub(crate) fn default_queue_path() -> PathBuf {
 pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
     let trimmed = raw.trim().trim_matches(['<', '>']);
     let lower = trimmed.to_ascii_lowercase();
-    let doi = if lower.starts_with("doi:") {
-        &trimmed[4..]
+    let (doi, from_url) = if lower.starts_with("doi:") {
+        (&trimmed[4..], false)
     } else if lower.starts_with("https://doi.org/") {
-        &trimmed[16..]
+        (&trimmed[16..], true)
     } else if lower.starts_with("http://doi.org/") {
-        &trimmed[15..]
+        (&trimmed[15..], true)
+    } else if lower.starts_with("https://dx.doi.org/") {
+        (&trimmed[19..], true)
+    } else if lower.starts_with("http://dx.doi.org/") {
+        (&trimmed[18..], true)
     } else {
-        trimmed
-    }
-    .trim()
-    .split(['?', '#'])
-    .next()
-    .unwrap_or_default()
-    .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
-    .to_ascii_lowercase();
+        (trimmed, false)
+    };
+    let doi = doi.trim();
+    let doi = if from_url {
+        doi.split(['?', '#']).next().unwrap_or_default()
+    } else {
+        doi
+    };
+    let doi = doi
+        .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
+        .to_ascii_lowercase();
 
-    if doi.starts_with("10.")
-        && doi.contains('/')
-        && doi.len() > 7
-        && doi.chars().all(|ch| !ch.is_whitespace())
-    {
+    if is_valid_doi(&doi) {
         Ok(doi)
     } else {
         Err(QueueError::InvalidDoi(raw.trim().to_string()))
     }
+}
+
+fn is_valid_doi(doi: &str) -> bool {
+    let Some(rest) = doi.strip_prefix("10.") else {
+        return false;
+    };
+    let Some((registrant, suffix)) = rest.split_once('/') else {
+        return false;
+    };
+
+    (4..=9).contains(&registrant.len())
+        && registrant.chars().all(|ch| ch.is_ascii_digit())
+        && !suffix.is_empty()
+        && suffix.chars().all(is_valid_doi_suffix_char)
+}
+
+fn is_valid_doi_suffix_char(ch: char) -> bool {
+    ch.is_ascii_graphic() && !matches!(ch, '"' | '\'' | ',' | '?' | '#' | '[' | ']' | '{' | '}')
 }
 
 fn temp_path_for(path: &Path) -> PathBuf {
@@ -363,7 +388,7 @@ impl QueueLock {
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    if windows_lock_file_is_stale(path) {
+                    if owner_lock_file_can_be_reclaimed(path, WINDOWS_STALE_LOCK_AFTER) {
                         match fs::remove_file(path) {
                             Ok(()) => continue,
                             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -400,36 +425,6 @@ impl Drop for QueueLock {
             let _ = fs::remove_file(&self.path);
         }
     }
-}
-
-fn lock_token() -> String {
-    format!("{}:{}", std::process::id(), unix_time_millis())
-}
-
-#[cfg(windows)]
-fn windows_lock_file_is_stale(path: &Path) -> bool {
-    if let Ok(contents) = fs::read_to_string(path) {
-        if let Some((_, millis)) = contents.trim().split_once(':') {
-            if let Ok(millis) = millis.parse::<u128>() {
-                return unix_time_millis().saturating_sub(millis)
-                    > WINDOWS_STALE_LOCK_AFTER.as_millis();
-            }
-        }
-    }
-
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .map(|age| age > WINDOWS_STALE_LOCK_AFTER)
-        .unwrap_or(false)
-}
-
-fn unix_time_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
 }
 
 fn unix_time() -> u64 {
@@ -473,6 +468,10 @@ mod tests {
             normalize_doi("<https://doi.org/10.1287/MNSC.2024.05040>").unwrap(),
             "10.1287/mnsc.2024.05040"
         );
+        assert_eq!(
+            normalize_doi("https://dx.doi.org/10.1000/ABC?utm_source=x").unwrap(),
+            "10.1000/abc"
+        );
     }
 
     #[test]
@@ -483,6 +482,22 @@ mod tests {
         ));
         assert!(matches!(
             normalize_doi("10.1287/has whitespace"),
+            Err(QueueError::InvalidDoi(_))
+        ));
+        assert!(matches!(
+            normalize_doi("10.1000/"),
+            Err(QueueError::InvalidDoi(_))
+        ));
+        assert!(matches!(
+            normalize_doi("10.foo/bar"),
+            Err(QueueError::InvalidDoi(_))
+        ));
+        assert!(matches!(
+            normalize_doi("10.5555/foo?bar"),
+            Err(QueueError::InvalidDoi(_))
+        ));
+        assert!(matches!(
+            normalize_doi("10.5555/foo#bar"),
             Err(QueueError::InvalidDoi(_))
         ));
     }

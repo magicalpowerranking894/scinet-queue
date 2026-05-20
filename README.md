@@ -29,16 +29,18 @@ in CI. Firefox and Zen support is planned, but not implemented.
 
 ## Install
 
+Requires Rust 1.85 or newer.
+
 From GitHub:
 
 ```sh
-cargo install --git https://github.com/tivris/scinet-queue
+cargo install --locked --git https://github.com/tivris/scinet-queue
 ```
 
 From a local checkout:
 
 ```sh
-cargo install --path .
+cargo install --locked --path .
 ```
 
 ## Usage

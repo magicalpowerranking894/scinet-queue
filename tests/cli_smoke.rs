@@ -18,6 +18,10 @@ fn help_and_version_work() {
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("Usage:"));
 
+    let command_help = snq().args(["request", "--help"]).output().unwrap();
+    assert!(command_help.status.success());
+    assert!(String::from_utf8_lossy(&command_help.stdout).contains("Usage:"));
+
     let version = snq().arg("--version").output().unwrap();
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).starts_with("snq "));
@@ -97,6 +101,35 @@ fn request_all_json_prints_empty_array_for_empty_queue() {
     assert_eq!(String::from_utf8_lossy(&request.stdout), "[]\n");
     assert!(request.stderr.is_empty());
 
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn json_errors_are_machine_readable() {
+    let home = temp_workspace("json-error-home");
+    let dir = temp_workspace("json-error-workspace");
+
+    let session = snq()
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .env("SCINET_QUEUE_BROWSER", home.join("missing-browser"))
+        .args(["session", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!session.status.success());
+    assert!(session.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&session.stderr).contains("snq:"));
+
+    let value: serde_json::Value = serde_json::from_slice(&session.stderr).unwrap();
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("SCINET_QUEUE_BROWSER does not exist")
+    );
+
+    fs::remove_dir_all(home).unwrap();
     fs::remove_dir_all(dir).unwrap();
 }
 
