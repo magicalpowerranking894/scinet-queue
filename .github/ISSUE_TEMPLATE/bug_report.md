@@ -26,4 +26,6 @@ snq ...
 
 ## Notes
 
-Do not include account credentials, cookies, tokens, or private paper files.
+Do not include account credentials, cookies, tokens, browser profile data,
+private paper files, or unredacted local paths/usernames. Redact `snq doctor`
+output before posting it publicly.

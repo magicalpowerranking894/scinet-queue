@@ -22,3 +22,7 @@
   failed browser startup cleanup, request failures, and forced local approval.
 - Hardened CDP startup retries, managed profile lock ownership, angle-wrapped
   DOI cleanup, and queue locking under parallel CLI bursts.
+- Hardened queue and managed-profile locks with held OS file locks across
+  supported platforms.
+- Hardened direct fetch state, doctor exit status, request logical-error
+  detection, and public fixtures.

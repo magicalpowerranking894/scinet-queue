@@ -33,7 +33,7 @@ fn queue_round_trip_works_from_cli() {
 
     let add = snq()
         .current_dir(&dir)
-        .args(["add", "10.1287/mnsc.2024.05040"])
+        .args(["add", "10.1000/snq-example"])
         .output()
         .unwrap();
     assert!(add.status.success());
@@ -45,12 +45,12 @@ fn queue_round_trip_works_from_cli() {
         .unwrap();
     assert!(list.status.success());
     let list = String::from_utf8_lossy(&list.stdout);
-    assert!(list.contains("\"doi\": \"10.1287/mnsc.2024.05040\""));
+    assert!(list.contains("\"doi\": \"10.1000/snq-example\""));
     assert!(list.contains("\"status\": \"queued\""));
 
     let remove = snq()
         .current_dir(&dir)
-        .args(["remove", "10.1287/mnsc.2024.05040"])
+        .args(["remove", "10.1000/snq-example"])
         .output()
         .unwrap();
     assert!(remove.status.success());
@@ -66,7 +66,7 @@ fn queue_round_trip_works_from_cli() {
 fn rejects_extra_trailing_arguments() {
     let dir = temp_workspace("extra-args");
     let import = dir.join("papers.md");
-    fs::write(&import, "10.1287/mnsc.2024.05040\n").unwrap();
+    fs::write(&import, "10.1000/snq-example\n").unwrap();
 
     let import_result = snq()
         .current_dir(&dir)
@@ -78,7 +78,7 @@ fn rejects_extra_trailing_arguments() {
 
     let remove_result = snq()
         .current_dir(&dir)
-        .args(["remove", "10.1287/mnsc.2024.05040", "extra"])
+        .args(["remove", "10.1000/snq-example", "extra"])
         .output()
         .unwrap();
     assert!(!remove_result.status.success());
@@ -128,6 +128,31 @@ fn json_errors_are_machine_readable() {
             .unwrap()
             .contains("SCINET_QUEUE_BROWSER does not exist")
     );
+
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn doctor_json_reports_failures_with_nonzero_exit() {
+    let home = temp_workspace("doctor-json-home");
+    let dir = temp_workspace("doctor-json-workspace");
+
+    let doctor = snq()
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .env("SCINET_QUEUE_BROWSER", home.join("missing-browser"))
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!doctor.status.success());
+    assert!(String::from_utf8_lossy(&doctor.stderr).contains("doctor: checks failed"));
+
+    let value: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["browser"]["ok"], false);
+    assert_eq!(value["queue"]["ok"], true);
 
     fs::remove_dir_all(home).unwrap();
     fs::remove_dir_all(dir).unwrap();

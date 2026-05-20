@@ -234,10 +234,9 @@ mod tests {
 
     #[test]
     fn request_accepts_doi_and_defaults_reward_to_one() {
-        let args =
-            parse_request(["10.1287/mnsc.2024.05040"].into_iter().map(str::to_string)).unwrap();
+        let args = parse_request(["10.1000/snq-example"].into_iter().map(str::to_string)).unwrap();
 
-        assert_eq!(args.doi.as_deref(), Some("10.1287/mnsc.2024.05040"));
+        assert_eq!(args.doi.as_deref(), Some("10.1000/snq-example"));
         assert_eq!(args.reward, 1);
         assert!(!args.all);
     }
@@ -254,7 +253,7 @@ mod tests {
 
         assert_eq!(
             parse_request(
-                ["10.1287/mnsc.2024.05040", "-r", "2"]
+                ["10.1000/snq-example", "-r", "2"]
                     .into_iter()
                     .map(str::to_string)
             )
@@ -285,7 +284,7 @@ mod tests {
         assert!(parse_request(["--foo"].into_iter().map(str::to_string)).is_err());
         assert!(
             parse_request(
-                ["--all", "10.1287/mnsc.2024.05040"]
+                ["--all", "10.1000/snq-example"]
                     .into_iter()
                     .map(str::to_string)
             )
@@ -296,13 +295,13 @@ mod tests {
     #[test]
     fn approve_requires_doi_and_accepts_force() {
         let args = parse_approve(
-            ["10.1287/mnsc.2024.05040", "--force"]
+            ["10.1000/snq-example", "--force"]
                 .into_iter()
                 .map(str::to_string),
         )
         .unwrap();
 
-        assert_eq!(args.doi, "10.1287/mnsc.2024.05040");
+        assert_eq!(args.doi, "10.1000/snq-example");
         assert!(args.force);
         assert!(parse_approve(std::iter::empty()).is_err());
         assert!(parse_approve(["--bad"].into_iter().map(str::to_string)).is_err());
@@ -357,26 +356,26 @@ mod tests {
     #[test]
     fn fetch_accepts_optional_doi() {
         let args = parse_fetch(
-            ["10.1287/mnsc.2024.05040", "--out", "papers"]
+            ["10.1000/snq-example", "--out", "papers"]
                 .into_iter()
                 .map(str::to_string),
         )
         .unwrap();
 
-        assert_eq!(args.doi.as_deref(), Some("10.1287/mnsc.2024.05040"));
+        assert_eq!(args.doi.as_deref(), Some("10.1000/snq-example"));
         assert_eq!(args.out_dir, PathBuf::from("papers"));
     }
 
     #[test]
     fn view_accepts_json_flag() {
         let args = parse_view(
-            ["10.1287/mnsc.2024.05040", "--json"]
+            ["10.1000/snq-example", "--json"]
                 .into_iter()
                 .map(str::to_string),
         )
         .unwrap();
 
-        assert_eq!(args.doi, "10.1287/mnsc.2024.05040");
+        assert_eq!(args.doi, "10.1000/snq-example");
         assert!(args.json);
         assert!(parse_view(std::iter::empty()).is_err());
         assert!(parse_view(["--bad"].into_iter().map(str::to_string)).is_err());

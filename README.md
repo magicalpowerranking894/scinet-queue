@@ -48,24 +48,24 @@ cargo install --locked --path .
 ```sh
 snq login
 snq session
-snq add 10.1287/mnsc.2024.05040
+snq add 10.1000/snq-example
 snq import papers.md
 snq list
 snq list --json
-snq remove 10.1287/mnsc.2024.05040
-snq check 10.1287/mnsc.2024.05040
-snq request 10.1287/mnsc.2024.05040 --reward 1
+snq remove 10.1000/snq-example
+snq check 10.1000/snq-example
+snq request 10.1000/snq-example --reward 1
 snq request --all --reward 1
 snq request --all --reward 1 --json
 snq watch
 snq watch --json
-snq view 10.1287/mnsc.2024.05040
-snq view 10.1287/mnsc.2024.05040 --json
-snq fetch 10.1287/mnsc.2024.05040 --out papers
+snq view 10.1000/snq-example
+snq view 10.1000/snq-example --json
+snq fetch 10.1000/snq-example --out papers
 snq fetch --out papers
 snq fetch --wait --poll 30 --out papers
-snq approve 10.1287/mnsc.2024.05040
-snq approve 10.1287/mnsc.2024.05040 --force
+snq approve 10.1000/snq-example
+snq approve 10.1000/snq-example --force
 snq doctor
 snq doctor --json
 ```
@@ -76,7 +76,7 @@ Agent-facing JSON:
 $ snq list --json
 [
   {
-    "doi": "10.1287/mnsc.2024.05040",
+    "doi": "10.1000/snq-example",
     "status": "working",
     "created_at": 1779283748,
     "updated_at": 1779285046
@@ -86,7 +86,7 @@ $ snq list --json
 $ snq watch --json
 [
   {
-    "doi": "10.1287/mnsc.2024.05040",
+    "doi": "10.1000/snq-example",
     "status": "working",
     "remote_state": "pdf"
   }
@@ -106,7 +106,7 @@ snq import research-papers.md
 snq request --all --reward 1
 snq watch
 snq fetch --wait --poll 30 --out papers
-snq approve 10.1287/mnsc.2024.05040
+snq approve 10.1000/snq-example
 ```
 
 Approval is always explicit.
@@ -140,6 +140,8 @@ loads with a logged-in session. Pass `--json` for structured output.
 
 `snq doctor` checks browser discovery, profile path resolution, queue
 readability, and Sci-Net session state. Pass `--json` for structured output.
+It exits nonzero if any check fails. Redact local usernames, profile paths, and
+paper paths before posting doctor output publicly.
 
 `snq check <doi>` calls Sci-Net's search endpoint from that browser session and
 prints the JSON response.

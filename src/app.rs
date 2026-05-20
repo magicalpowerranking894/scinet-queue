@@ -390,6 +390,10 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             } else {
                 print_doctor_report(&report);
             }
+
+            if !report.is_ok() {
+                return Err("doctor: checks failed".to_string());
+            }
         }
         Some(command) => {
             return Err(format!(
@@ -510,7 +514,13 @@ fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
 
 fn ensure_request_ok(doi: &str, response: &ScinetResponse) -> Result<(), String> {
     if response.ok {
-        Ok(())
+        if let Some(error) = response.logical_error() {
+            Err(format!(
+                "request: Sci-Net returned logical error for {doi}: {error}"
+            ))
+        } else {
+            Ok(())
+        }
     } else {
         Err(format!(
             "request: Sci-Net returned status {} for {doi}",
@@ -566,15 +576,15 @@ mod tests {
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
 
-        queue.add("10.1287/mnsc.2024.05040").unwrap();
+        queue.add("10.1000/snq-example").unwrap();
         queue
-            .set_status("10.1287/mnsc.2024.05040", QueueStatus::Requested)
+            .set_status("10.1000/snq-example", QueueStatus::Requested)
             .unwrap();
 
         let status = update_status_from_remote(
             &queue,
             QueueStatus::Requested,
-            "10.1287/mnsc.2024.05040",
+            "10.1000/snq-example",
             RequestRemoteState::Working,
         )
         .unwrap();
@@ -592,10 +602,10 @@ mod tests {
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
 
-        queue.add("10.1287/mnsc.2024.05040").unwrap();
-        queue.add("10.1093/rfs/hhaa075").unwrap();
+        queue.add("10.1000/snq-example").unwrap();
+        queue.add("10.1000/snq-alt").unwrap();
         queue
-            .set_status("10.1093/rfs/hhaa075", QueueStatus::Requested)
+            .set_status("10.1000/snq-alt", QueueStatus::Requested)
             .unwrap();
 
         let request = RequestArgs {
@@ -607,7 +617,7 @@ mod tests {
 
         assert_eq!(
             request_dois(&queue, &request).unwrap(),
-            vec!["10.1287/mnsc.2024.05040".to_string()]
+            vec!["10.1000/snq-example".to_string()]
         );
 
         let _ = fs::remove_dir_all(dir);
@@ -619,14 +629,14 @@ mod tests {
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
 
-        queue.add("10.1287/mnsc.2024.05040").unwrap();
-        assert!(ensure_can_approve(&queue, "10.1287/mnsc.2024.05040", false).is_err());
+        queue.add("10.1000/snq-example").unwrap();
+        assert!(ensure_can_approve(&queue, "10.1000/snq-example", false).is_err());
 
         queue
-            .set_status("10.1287/mnsc.2024.05040", QueueStatus::Fetched)
+            .set_status("10.1000/snq-example", QueueStatus::Fetched)
             .unwrap();
-        assert!(ensure_can_approve(&queue, "10.1287/mnsc.2024.05040", false).is_ok());
-        assert!(ensure_can_approve(&queue, "10.1093/rfs/hhaa075", true).is_ok());
+        assert!(ensure_can_approve(&queue, "10.1000/snq-example", false).is_ok());
+        assert!(ensure_can_approve(&queue, "10.1000/snq-alt", true).is_ok());
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -637,7 +647,7 @@ mod tests {
             std::env::temp_dir().join(format!("snq-force-approve-test-{}", std::process::id()));
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
-        let doi = "10.1093/rfs/hhaa075";
+        let doi = "10.1000/snq-alt";
 
         ensure_can_approve(&queue, doi, true).unwrap();
         mark_approved(&queue, doi).unwrap();
@@ -658,6 +668,17 @@ mod tests {
             body: serde_json::json!({ "error": "boom" }),
         };
 
-        assert!(ensure_request_ok("10.1093/rfs/hhaa075", &response).is_err());
+        assert!(ensure_request_ok("10.1000/snq-alt", &response).is_err());
+    }
+
+    #[test]
+    fn request_logical_error_response_is_rejected() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "success": false, "message": "invalid request" }),
+        };
+
+        assert!(ensure_request_ok("10.1000/snq-alt", &response).is_err());
     }
 }

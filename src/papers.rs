@@ -120,15 +120,26 @@ pub(crate) fn fetch_one(
     let out_path = output_path(out_dir, doi, pdf_url);
     fs::write(&out_path, download.bytes).map_err(|error| error.to_string())?;
 
+    mark_fetched(queue, doi)?;
+
+    Ok(Some(out_path))
+}
+
+fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
     match queue
         .set_status(doi, QueueStatus::Fetched)
         .map_err(|error| error.to_string())?
     {
         StatusResult::Updated(_) => {}
-        StatusResult::NotFound(_) => {}
+        StatusResult::NotFound(_) => {
+            let _ = queue.add(doi).map_err(|error| error.to_string())?;
+            let _ = queue
+                .set_status(doi, QueueStatus::Fetched)
+                .map_err(|error| error.to_string())?;
+        }
     }
 
-    Ok(Some(out_path))
+    Ok(())
 }
 
 fn validate_pdf(bytes: &[u8]) -> Result<(), String> {
@@ -192,31 +203,31 @@ mod tests {
     #[test]
     fn extracts_dois_from_markdown_text() {
         let text = r#"
-- https://doi.org/10.1287/MNSC.2024.05040
-- doi:10.1093/rfs/hhaa075.
-- duplicate 10.1287/mnsc.2024.05040
+- https://doi.org/10.1000/SNQ-EXAMPLE
+- doi:10.1000/snq-alt.
+- duplicate 10.1000/snq-example
 - query string https://doi.org/10.1000/ABC?utm_source=x
-- angle wrapped <https://doi.org/10.1145/3544548.3581400>
+- angle wrapped <https://doi.org/10.1000/snq-angle>
 "#;
 
         assert_eq!(
             extract_dois(text),
             vec![
-                "10.1287/mnsc.2024.05040".to_string(),
-                "10.1093/rfs/hhaa075".to_string(),
+                "10.1000/snq-example".to_string(),
+                "10.1000/snq-alt".to_string(),
                 "10.1000/abc".to_string(),
-                "10.1145/3544548.3581400".to_string()
+                "10.1000/snq-angle".to_string()
             ]
         );
     }
 
     #[test]
     fn extracts_old_style_dois_with_angle_brackets() {
-        let text = "10.1002/(SICI)1097-4571(199505)46:4<327::AID-ASI5>3.0.CO;2-0";
+        let text = "10.1000/(EXAMPLE)1234<567::SNQ-FIXTURE>8.9.EX;2-0";
 
         assert_eq!(
             extract_dois(text),
-            vec!["10.1002/(sici)1097-4571(199505)46:4<327::aid-asi5>3.0.co;2-0"]
+            vec!["10.1000/(example)1234<567::snq-fixture>8.9.ex;2-0"]
         );
     }
 
@@ -258,25 +269,25 @@ mod tests {
     fn pdf_filename_prefers_pdf_url_tail() {
         assert_eq!(
             pdf_filename(
-                "10.1287/mnsc.2024.05040",
-                "https://sci-net.xyz/storage/abc/Product Variety.pdf?token=x"
+                "10.1000/snq-example",
+                "https://sci-net.xyz/storage/abc/Example Paper.pdf?token=x"
             ),
-            "Product-Variety.pdf"
+            "Example-Paper.pdf"
         );
         assert_eq!(
             pdf_filename(
-                "10.1287/mnsc.2024.05040",
-                "https://sci-net.xyz/storage/abc/Product Variety.pdf#view=FitH"
+                "10.1000/snq-example",
+                "https://sci-net.xyz/storage/abc/Example Paper.pdf#view=FitH"
             ),
-            "Product-Variety.pdf"
+            "Example-Paper.pdf"
         );
     }
 
     #[test]
     fn pdf_filename_falls_back_to_doi() {
         assert_eq!(
-            pdf_filename("10.1287/mnsc.2024.05040", "https://sci-net.xyz/view/x"),
-            "10.1287-mnsc.2024.05040.pdf"
+            pdf_filename("10.1000/snq-example", "https://sci-net.xyz/view/x"),
+            "10.1000-snq-example.pdf"
         );
     }
 
@@ -292,6 +303,24 @@ mod tests {
             output_path(&dir, "10.1000/one", "https://x/paper.pdf"),
             dir.join("paper-3.pdf")
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mark_fetched_creates_missing_queue_entry() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-mark-fetched-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let doi = "10.1000/fetched";
+
+        mark_fetched(&queue, doi).unwrap();
+
+        let entries = queue.list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].doi, doi);
+        assert_eq!(entries[0].status, QueueStatus::Fetched);
 
         let _ = fs::remove_dir_all(dir);
     }

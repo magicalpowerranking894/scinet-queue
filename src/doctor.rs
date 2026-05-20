@@ -8,12 +8,19 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Serialize)]
 pub(crate) struct DoctorReport {
+    ok: bool,
     version: String,
     scinet_url: String,
     browser: DoctorBrowser,
     profile: DoctorProfile,
     queue: DoctorQueue,
     session: DoctorSession,
+}
+
+impl DoctorReport {
+    pub(crate) fn is_ok(&self) -> bool {
+        self.ok
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -173,7 +180,10 @@ pub(crate) fn doctor_report(queue: &Queue) -> DoctorReport {
         ),
     };
 
+    let ok = browser_info.ok && profile_info.ok && queue_info.ok && session_info.ok;
+
     DoctorReport {
+        ok,
         version: VERSION.to_string(),
         scinet_url: SCINET_URL.to_string(),
         browser: browser_info,
@@ -184,6 +194,7 @@ pub(crate) fn doctor_report(queue: &Queue) -> DoctorReport {
 }
 
 pub(crate) fn print_doctor_report(report: &DoctorReport) {
+    println!("ok\t{}", report.ok);
     println!("version\t{}", report.version);
     println!("scinet\t{}", report.scinet_url);
     println!(

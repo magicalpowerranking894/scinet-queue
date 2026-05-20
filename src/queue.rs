@@ -1,9 +1,7 @@
-#[cfg(not(windows))]
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
-#[cfg(not(windows))]
 use std::fs::File;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -11,13 +9,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::locks::lock_token;
-#[cfg(windows)]
-use crate::locks::owner_lock_file_can_be_reclaimed;
 
 const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const QUEUE_LOCK_POLL: Duration = Duration::from_millis(50);
-#[cfg(windows)]
-const WINDOWS_STALE_LOCK_AFTER: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct QueueEntry {
@@ -319,16 +313,10 @@ fn temp_path_for(path: &Path) -> PathBuf {
 
 #[derive(Debug)]
 struct QueueLock {
-    #[cfg(not(windows))]
     file: File,
-    #[cfg(windows)]
-    path: PathBuf,
-    #[cfg(windows)]
-    token: String,
 }
 
 impl QueueLock {
-    #[cfg(not(windows))]
     fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -348,6 +336,7 @@ impl QueueLock {
                 Ok(()) => {
                     file.set_len(0)?;
                     writeln!(file, "{token}")?;
+                    file.sync_all()?;
 
                     return Ok(Self { file });
                 }
@@ -362,68 +351,11 @@ impl QueueLock {
             }
         }
     }
-
-    #[cfg(windows)]
-    fn acquire(path: &Path, timeout: Duration) -> Result<Self, QueueError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let start = Instant::now();
-        let token = lock_token();
-
-        loop {
-            match fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(path)
-            {
-                Ok(mut file) => {
-                    writeln!(file, "{token}")?;
-
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                        token,
-                    });
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    if owner_lock_file_can_be_reclaimed(path, WINDOWS_STALE_LOCK_AFTER) {
-                        match fs::remove_file(path) {
-                            Ok(()) => continue,
-                            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                            Err(error) => return Err(QueueError::Io(error)),
-                        }
-                    }
-
-                    if start.elapsed() >= timeout {
-                        return Err(QueueError::QueueLocked(path.to_path_buf()));
-                    }
-
-                    thread::sleep(QUEUE_LOCK_POLL);
-                }
-                Err(error) => return Err(QueueError::Io(error)),
-            }
-        }
-    }
 }
 
-#[cfg(not(windows))]
 impl Drop for QueueLock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.file);
-    }
-}
-
-#[cfg(windows)]
-impl Drop for QueueLock {
-    fn drop(&mut self) {
-        if fs::read_to_string(&self.path)
-            .map(|contents| contents.trim() == self.token)
-            .unwrap_or(false)
-        {
-            let _ = fs::remove_file(&self.path);
-        }
     }
 }
 
@@ -441,12 +373,12 @@ mod tests {
     #[test]
     fn normalizes_common_doi_forms() {
         assert_eq!(
-            normalize_doi(" https://doi.org/10.1287/MNSC.2024.05040 ").unwrap(),
-            "10.1287/mnsc.2024.05040"
+            normalize_doi(" https://doi.org/10.1000/SNQ-EXAMPLE ").unwrap(),
+            "10.1000/snq-example"
         );
         assert_eq!(
-            normalize_doi("doi:10.1093/rfs/hhaa075").unwrap(),
-            "10.1093/rfs/hhaa075"
+            normalize_doi("doi:10.1000/snq-alt").unwrap(),
+            "10.1000/snq-alt"
         );
         assert_eq!(
             normalize_doi(" Doi:10.7000/Mixed ").unwrap(),
@@ -461,12 +393,12 @@ mod tests {
             "10.1000/abc"
         );
         assert_eq!(
-            normalize_doi("doi:10.1093/rfs/hhaa075.").unwrap(),
-            "10.1093/rfs/hhaa075"
+            normalize_doi("doi:10.1000/snq-alt.").unwrap(),
+            "10.1000/snq-alt"
         );
         assert_eq!(
-            normalize_doi("<https://doi.org/10.1287/MNSC.2024.05040>").unwrap(),
-            "10.1287/mnsc.2024.05040"
+            normalize_doi("<https://doi.org/10.1000/SNQ-EXAMPLE>").unwrap(),
+            "10.1000/snq-example"
         );
         assert_eq!(
             normalize_doi("https://dx.doi.org/10.1000/ABC?utm_source=x").unwrap(),
@@ -481,7 +413,7 @@ mod tests {
             Err(QueueError::InvalidDoi(_))
         ));
         assert!(matches!(
-            normalize_doi("10.1287/has whitespace"),
+            normalize_doi("10.1000/has whitespace"),
             Err(QueueError::InvalidDoi(_))
         ));
         assert!(matches!(
@@ -508,27 +440,22 @@ mod tests {
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
 
-        let first = queue.add("10.1287/mnsc.2024.05040").unwrap();
-        let duplicate = queue
-            .add("https://doi.org/10.1287/MNSC.2024.05040")
-            .unwrap();
+        let first = queue.add("10.1000/snq-example").unwrap();
+        let duplicate = queue.add("https://doi.org/10.1000/SNQ-EXAMPLE").unwrap();
         let entries = queue.list().unwrap();
-        let removed = queue.remove("10.1287/mnsc.2024.05040").unwrap();
+        let removed = queue.remove("10.1000/snq-example").unwrap();
         let after_remove = queue.list().unwrap();
 
-        assert_eq!(
-            first,
-            AddResult::Queued("10.1287/mnsc.2024.05040".to_string())
-        );
+        assert_eq!(first, AddResult::Queued("10.1000/snq-example".to_string()));
         assert_eq!(
             duplicate,
-            AddResult::AlreadyQueued("10.1287/mnsc.2024.05040".to_string())
+            AddResult::AlreadyQueued("10.1000/snq-example".to_string())
         );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].status, QueueStatus::Queued);
         assert_eq!(
             removed,
-            RemoveResult::Removed("10.1287/mnsc.2024.05040".to_string())
+            RemoveResult::Removed("10.1000/snq-example".to_string())
         );
         assert!(after_remove.is_empty());
 
@@ -541,15 +468,15 @@ mod tests {
         let path = dir.join("queue.jsonl");
         let queue = Queue::new(path);
 
-        queue.add("10.1287/mnsc.2024.05040").unwrap();
+        queue.add("10.1000/snq-example").unwrap();
         let result = queue
-            .set_status("10.1287/mnsc.2024.05040", QueueStatus::Requested)
+            .set_status("10.1000/snq-example", QueueStatus::Requested)
             .unwrap();
         let entries = queue.list().unwrap();
 
         assert_eq!(
             result,
-            StatusResult::Updated("10.1287/mnsc.2024.05040".to_string())
+            StatusResult::Updated("10.1000/snq-example".to_string())
         );
         assert_eq!(entries[0].status, QueueStatus::Requested);
         assert!(entries[0].updated_at >= entries[0].created_at);

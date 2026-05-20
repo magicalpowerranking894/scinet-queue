@@ -1,19 +1,21 @@
 use directories::ProjectDirs;
+use fs2::FileExt;
 use std::env;
 use std::fmt;
 use std::fs;
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::locks::{lock_token, owner_lock_file_can_be_reclaimed};
+use crate::locks::lock_token;
 use crate::scinet::SCINET_URL;
 
 const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
-const PROFILE_LOCK_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
-
+const PROFILE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+const PROFILE_LOCK_POLL: Duration = Duration::from_millis(50);
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Browser {
     pub(crate) engine: BrowserEngine,
@@ -326,57 +328,49 @@ fn add_login_args(command: &mut Command, engine: BrowserEngine, profile_dir: &Pa
 
 #[derive(Debug)]
 struct ProfileLock {
-    path: PathBuf,
-    token: String,
+    file: File,
 }
 
 impl ProfileLock {
     fn acquire(profile_dir: &Path) -> Result<Self, BrowserError> {
+        Self::acquire_with_timeout(profile_dir, PROFILE_LOCK_TIMEOUT)
+    }
+
+    fn acquire_with_timeout(profile_dir: &Path, timeout: Duration) -> Result<Self, BrowserError> {
         let path = profile_dir.join(".snq-profile.lock");
         let token = lock_token();
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let start = Instant::now();
 
-        let mut file = loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(file) => break file,
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if owner_lock_file_can_be_reclaimed(&path, PROFILE_LOCK_STALE_AFTER) {
-                        match fs::remove_file(&path) {
-                            Ok(()) => continue,
-                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                                continue;
-                            }
-                            Err(error) => return Err(BrowserError::Io(error)),
-                        }
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() >= timeout {
+                        return Err(BrowserError::ProfileLocked(path));
                     }
 
-                    return Err(BrowserError::ProfileLocked(path.clone()));
+                    thread::sleep(PROFILE_LOCK_POLL);
                 }
                 Err(error) => return Err(BrowserError::Io(error)),
             }
-        };
+        }
 
+        file.set_len(0)?;
         writeln!(file, "{token}")?;
         file.sync_all()?;
-        Ok(Self { path, token })
+        Ok(Self { file })
     }
 }
 
 impl Drop for ProfileLock {
     fn drop(&mut self) {
-        remove_lock_if_owned(&self.path, &self.token);
-    }
-}
-
-fn remove_lock_if_owned(path: &Path, token: &str) {
-    if fs::read_to_string(path)
-        .map(|contents| contents.trim() == token)
-        .unwrap_or(false)
-    {
-        let _ = fs::remove_file(path);
+        let _ = FileExt::unlock(&self.file);
     }
 }
 
@@ -558,37 +552,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         let lock = ProfileLock::acquire(&dir).unwrap();
-        let second = ProfileLock::acquire(&dir);
+        let second = ProfileLock::acquire_with_timeout(&dir, Duration::from_millis(1));
 
         assert!(matches!(second, Err(BrowserError::ProfileLocked(_))));
 
         drop(lock);
-        assert!(ProfileLock::acquire(&dir).is_ok());
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn profile_lock_drop_preserves_replacement_lock() {
-        let dir = env::temp_dir().join(format!(
-            "snq-profile-lock-owner-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(".snq-profile.lock");
-
-        let first = ProfileLock::acquire(&dir).unwrap();
-        fs::remove_file(&path).unwrap();
-        let second = ProfileLock::acquire(&dir).unwrap();
-
-        drop(first);
-        assert!(matches!(
-            ProfileLock::acquire(&dir),
-            Err(BrowserError::ProfileLocked(_))
-        ));
-
-        drop(second);
         assert!(ProfileLock::acquire(&dir).is_ok());
 
         let _ = fs::remove_dir_all(dir);

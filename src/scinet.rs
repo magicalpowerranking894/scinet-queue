@@ -102,6 +102,38 @@ impl ScinetResponse {
             .map(looks_like_login_text)
             .unwrap_or(false)
     }
+
+    pub(crate) fn logical_error(&self) -> Option<String> {
+        if self.body.get("ok").and_then(Value::as_bool) == Some(false)
+            || self.body.get("success").and_then(Value::as_bool) == Some(false)
+        {
+            return Some("response body reported failure".to_string());
+        }
+
+        for key in ["error", "errors"] {
+            if let Some(value) = self.body.get(key).filter(|value| !value.is_null()) {
+                return Some(format!("response body contained `{key}`: {value}"));
+            }
+        }
+
+        let text = self
+            .body
+            .get("message")
+            .or_else(|| self.body.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        if looks_like_login_text(&text)
+            || text.contains("error")
+            || text.contains("failed")
+            || text.contains("invalid")
+        {
+            return Some("response body looked like an error".to_string());
+        }
+
+        None
+    }
 }
 
 fn looks_like_login_text(text: &str) -> bool {
@@ -340,6 +372,17 @@ mod tests {
     }
 
     #[test]
+    fn detects_logical_error_response() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({ "ok": false, "message": "invalid DOI" }),
+        };
+
+        assert!(response.logical_error().is_some());
+    }
+
+    #[test]
     fn request_view_reports_pdf_presence() {
         let view = RequestView {
             title: "Sci-Net".to_string(),
@@ -368,10 +411,7 @@ mod tests {
 
     #[test]
     fn encodes_doi_as_one_path_segment() {
-        assert_eq!(
-            path_segment("10.1287/mnsc.2024.05040"),
-            "10.1287%2Fmnsc.2024.05040"
-        );
+        assert_eq!(path_segment("10.1000/snq-example"), "10.1000%2Fsnq-example");
         assert_eq!(
             path_segment("10.1000/foo?bar#baz"),
             "10.1000%2Ffoo%3Fbar%23baz"
@@ -380,10 +420,7 @@ mod tests {
 
     #[test]
     fn encodes_doi_route_while_preserving_slash() {
-        assert_eq!(
-            doi_path("10.1287/mnsc.2024.05040"),
-            "10.1287/mnsc.2024.05040"
-        );
+        assert_eq!(doi_path("10.1000/snq-example"), "10.1000/snq-example");
         assert_eq!(doi_path("10.1000/foo?bar#baz"), "10.1000/foo%3Fbar%23baz");
     }
 
@@ -419,11 +456,11 @@ mod tests {
         assert_eq!(
             view.pdf_urls,
             vec![
-                "https://sci-net.xyz/storage/6e3f106c16317628a337761c3aaaa768/Product-Variety-and-Asset-Pricing.pdf#view=FitH&navpanes=0"
+                "https://sci-net.xyz/storage/fixture/example-fixture-paper.pdf#view=FitH&navpanes=0"
                     .to_string()
             ]
         );
-        assert!(view.text.contains("Product Variety and Asset Pricing"));
+        assert!(view.text.contains("Example Fixture Paper"));
     }
 
     fn fixture_view(name: &str) -> RequestView {
@@ -437,7 +474,7 @@ mod tests {
 
         RequestView {
             title: fixture_title(html),
-            url: "https://sci-net.xyz/10.1287/mnsc.2024.05040".to_string(),
+            url: "https://sci-net.xyz/10.0000/snq-fixture".to_string(),
             text: fixture_text(html),
             pdf_urls: fixture_pdf_urls(html),
         }
