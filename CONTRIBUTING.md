@@ -33,8 +33,8 @@ cargo package --locked
 - `src/app.rs`: command dispatch and workflow glue.
 - `src/args.rs`: handwritten argument parsing.
 - `src/output.rs`: text and JSON output shapes.
-- `src/browser.rs`: browser discovery, profile paths, and process launch.
-- `src/cdp.rs`: generic Chrome DevTools Protocol transport.
+- `src/browser.rs`: browser-family discovery, profile paths, and process launch.
+- `src/cdp.rs`: Chrome DevTools Protocol transport for Chromium-compatible browsers.
 - `src/scinet.rs`: Sci-Net session, request, view, and remote-state behavior.
 - `src/papers.rs`: DOI extraction, PDF naming, fetch validation.
 - `src/queue.rs`: workspace-local JSONL queue state.

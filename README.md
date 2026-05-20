@@ -9,21 +9,22 @@ The binary is `snq`.
 
 ## Status
 
-Early development. The local queue, Chromium session probe, Sci-Net search,
+Early development. The local queue, browser session probe, Sci-Net search,
 request, watch, fetch, local approve, JSON output, and doctor commands are
 supported.
 
 Authenticated commands currently require a Chromium-compatible browser with
 Chrome DevTools Protocol support. macOS, Linux, and Windows builds are checked
-in CI. Firefox and Zen support is planned, but not implemented.
+in CI. Firefox/Gecko-based browser automation through WebDriver BiDi is
+planned, but not implemented.
 
 | Area | Status |
 | --- | --- |
 | macOS | CI checked |
 | Linux | CI checked |
 | Windows | CI checked |
-| Chrome, Chromium, Brave, Edge | Supported for authenticated commands |
-| Firefox, Zen | Planned |
+| Chromium-compatible browsers (Chrome, Chromium, Brave, Edge) | Supported for authenticated commands through Chrome DevTools Protocol |
+| Firefox/Gecko-based browsers (Firefox, Zen) | Planned through WebDriver BiDi |
 | Existing browser cookie import | Not supported |
 | Automatic token approval | Not supported |
 
@@ -167,12 +168,13 @@ keep checking until a PDF appears.
 default, the queue entry must already be fetched. Use `--force` only when the
 PDF was reviewed outside `snq`.
 
-This avoids decrypting cookies from Chrome, Firefox, Edge, Brave, Zen, or the
-operating system keychain. Importing an existing browser profile is outside the
-default flow.
+This avoids decrypting cookies from existing browser profiles or the operating
+system keychain. Importing an existing browser profile is outside the default
+flow.
 
 Chromium-compatible browsers are supported first through Chrome DevTools
-Protocol. Firefox support is planned through WebDriver BiDi.
+Protocol. Firefox/Gecko-based browser automation is planned through WebDriver
+BiDi.
 
 Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 
@@ -180,8 +182,8 @@ Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 
 - Authenticated commands use Chrome DevTools Protocol and currently require a
   Chromium-compatible browser.
-- Firefox and Zen are detected for login profile setup, but headless session
-  automation is not implemented yet.
+- Firefox/Gecko-based browser automation through WebDriver BiDi is not
+  implemented yet.
 - Sci-Net is a third-party website. UI or endpoint changes can break request
   detection, PDF detection, or download behavior.
 - `snq approve` is local review state only. It does not automatically release
