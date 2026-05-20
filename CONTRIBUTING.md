@@ -23,7 +23,7 @@ cargo package --locked
 - Explain the behavior change.
 - Add tests for parser, queue, state, and network edge behavior.
 - Avoid unrelated formatting or refactors.
-- Use pull requests for code changes to `main`.
+- External code contributions should use pull requests.
 - Let the full CI matrix pass before merging.
 - Use draft pull requests or temporary branches for platform-specific CI work.
 
@@ -33,8 +33,10 @@ cargo package --locked
 - `src/app.rs`: command dispatch and workflow glue.
 - `src/args.rs`: handwritten argument parsing.
 - `src/output.rs`: text and JSON output shapes.
-- `src/browser.rs`: browser-family discovery, profile paths, and process launch.
+- `src/browser.rs`: browser-engine discovery, profile paths, and process launch.
+- `src/page.rs`: protocol-neutral page/session wrapper.
 - `src/cdp.rs`: Chrome DevTools Protocol transport for Chromium-compatible browsers.
+- `src/bidi.rs`: WebDriver BiDi transport for Firefox/Gecko-based browsers.
 - `src/scinet.rs`: Sci-Net session, request, view, and remote-state behavior.
 - `src/papers.rs`: DOI extraction, PDF naming, fetch validation.
 - `src/queue.rs`: workspace-local JSONL queue state.
