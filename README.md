@@ -8,7 +8,8 @@ The binary is `snq`.
 ## Status
 
 Early development. The local queue, Chromium session probe, Sci-Net search,
-request, watch, fetch, and approve commands are supported.
+request, watch, fetch, local approve, JSON output, and doctor commands are
+supported.
 
 Authenticated commands currently require a Chromium-compatible browser with
 Chrome DevTools Protocol support. macOS, Linux, and Windows builds are checked
@@ -28,17 +29,23 @@ snq session
 snq add 10.1287/mnsc.2024.05040
 snq import papers.md
 snq list
+snq list --json
 snq remove 10.1287/mnsc.2024.05040
 snq check 10.1287/mnsc.2024.05040
 snq request 10.1287/mnsc.2024.05040 --reward 1
 snq request --all --reward 1
+snq request --all --reward 1 --json
 snq watch
+snq watch --json
 snq view 10.1287/mnsc.2024.05040
+snq view 10.1287/mnsc.2024.05040 --json
 snq fetch 10.1287/mnsc.2024.05040 --out papers
 snq fetch --out papers
 snq fetch --wait --poll 30 --out papers
 snq approve 10.1287/mnsc.2024.05040
 snq approve 10.1287/mnsc.2024.05040 --force
+snq doctor
+snq doctor --json
 ```
 
 `snq add` accepts one or more DOIs. `snq import <path>` extracts DOIs from a
@@ -84,18 +91,24 @@ without taking over the user's normal browser. Use `snq login --no-wait` to
 leave the login browser open.
 
 `snq session` starts the managed profile headlessly and checks whether Sci-Net
-loads with a logged-in session.
+loads with a logged-in session. Pass `--json` for structured output.
+
+`snq doctor` checks browser discovery, profile path resolution, queue
+readability, and Sci-Net session state. Pass `--json` for structured output.
 
 `snq check <doi>` calls Sci-Net's search endpoint from that browser session and
 prints the JSON response.
 
 `snq request <doi> --reward <n>` posts a Sci-Net request from the same session.
 `snq request --all --reward <n>` requests queued entries.
+Pass `--json` for structured request results.
 
 `snq watch` checks queued requests for visible PDF uploads.
+Pass `--json` for structured queue and remote state.
 
 `snq view <doi>` prints the remote request state, detected PDF links, and a
-short text excerpt for one request.
+short text excerpt for one request. Pass `--json` for the full captured text
+and PDF links.
 
 `snq fetch <doi> --out <dir>` downloads one available PDF into the output
 directory and marks the queue entry as fetched. Without a DOI, `snq fetch`
@@ -118,9 +131,10 @@ Set `SCINET_QUEUE_BROWSER=/path/to/browser` to use a specific browser binary.
 ## Responsible Use
 
 `scinet-queue` is an independent tool for automating a user's own Sci-Net
-session. It is not affiliated with Sci-Net, third-party paper index, or any publisher. It does
-not bypass authentication, paywalls, or access controls. Use it only where you
-have the right to request, download, and store the papers involved.
+session for lawful educational and research workflows. It is not affiliated
+with Sci-Net, third-party paper index, or any publisher. It does not bypass authentication,
+paywalls, or access controls. Use it only where you have the right to request,
+download, and store the papers involved.
 
 ## Storage
 

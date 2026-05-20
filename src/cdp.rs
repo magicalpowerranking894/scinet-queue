@@ -31,7 +31,8 @@ pub struct RequestView {
     pub pdf_urls: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum RequestRemoteState {
     LoggedOut,
     Pdf,
@@ -491,7 +492,7 @@ mod tests {
     fn request_view_reports_pdf_presence() {
         let view = RequestView {
             title: "Sci-Net".to_string(),
-            url: "https://sci-net.xyz/view/10.x".to_string(),
+            url: "https://sci-net.xyz/10.x".to_string(),
             text: "uploaded".to_string(),
             pdf_urls: vec!["https://sci-net.xyz/storage/paper.pdf".to_string()],
         };
@@ -505,7 +506,7 @@ mod tests {
     fn request_view_reports_working_state() {
         let view = RequestView {
             title: "Sci-Net".to_string(),
-            url: "https://sci-net.xyz/view/10.x".to_string(),
+            url: "https://sci-net.xyz/10.x".to_string(),
             text: "This member is working on solving the request and will upload PDF in 30 minutes"
                 .to_string(),
             pdf_urls: Vec::new(),
@@ -533,5 +534,131 @@ mod tests {
             "10.1287/mnsc.2024.05040"
         );
         assert_eq!(doi_path("10.1000/foo?bar#baz"), "10.1000/foo%3Fbar%23baz");
+    }
+
+    #[test]
+    fn fixture_detects_logged_out_state() {
+        let view = fixture_view("logged_out.html");
+
+        assert_eq!(view.remote_state(), RequestRemoteState::LoggedOut);
+        assert!(view.pdf_urls.is_empty());
+    }
+
+    #[test]
+    fn fixture_detects_pending_state() {
+        let view = fixture_view("pending.html");
+
+        assert_eq!(view.remote_state(), RequestRemoteState::Pending);
+        assert!(view.pdf_urls.is_empty());
+    }
+
+    #[test]
+    fn fixture_detects_working_state() {
+        let view = fixture_view("working.html");
+
+        assert_eq!(view.remote_state(), RequestRemoteState::Working);
+        assert!(view.pdf_urls.is_empty());
+    }
+
+    #[test]
+    fn fixture_detects_solved_pdf_state() {
+        let view = fixture_view("solved.html");
+
+        assert_eq!(view.remote_state(), RequestRemoteState::Pdf);
+        assert_eq!(
+            view.pdf_urls,
+            vec![
+                "https://sci-net.xyz/storage/6e3f106c16317628a337761c3aaaa768/Product-Variety-and-Asset-Pricing.pdf#view=FitH&navpanes=0"
+                    .to_string()
+            ]
+        );
+        assert!(view.text.contains("Product Variety and Asset Pricing"));
+    }
+
+    fn fixture_view(name: &str) -> RequestView {
+        let html = match name {
+            "logged_out.html" => include_str!("../tests/fixtures/scinet/logged_out.html"),
+            "pending.html" => include_str!("../tests/fixtures/scinet/pending.html"),
+            "working.html" => include_str!("../tests/fixtures/scinet/working.html"),
+            "solved.html" => include_str!("../tests/fixtures/scinet/solved.html"),
+            _ => unreachable!("unknown fixture"),
+        };
+
+        RequestView {
+            title: fixture_title(html),
+            url: "https://sci-net.xyz/10.1287/mnsc.2024.05040".to_string(),
+            text: fixture_text(html),
+            pdf_urls: fixture_pdf_urls(html),
+        }
+    }
+
+    fn fixture_title(html: &str) -> String {
+        between(html, "<title>", "</title>")
+            .unwrap_or("Sci-Net")
+            .trim()
+            .to_string()
+    }
+
+    fn fixture_text(html: &str) -> String {
+        let mut text = String::new();
+        let mut in_tag = false;
+
+        for ch in html.chars() {
+            match ch {
+                '<' => {
+                    in_tag = true;
+                    text.push(' ');
+                }
+                '>' => in_tag = false,
+                _ if !in_tag => text.push(ch),
+                _ => {}
+            }
+        }
+
+        text.replace("&amp;", "&")
+            .replace("&nbsp;", " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn fixture_pdf_urls(html: &str) -> Vec<String> {
+        let mut urls = Vec::new();
+
+        for attr in ["href=\"", "src=\"", "data=\""] {
+            let mut rest = html;
+
+            while let Some(index) = rest.find(attr) {
+                rest = &rest[index + attr.len()..];
+                let Some(end) = rest.find('"') else {
+                    break;
+                };
+                let value = rest[..end].replace("&amp;", "&");
+
+                if value.contains("/storage/") || value.to_ascii_lowercase().contains(".pdf") {
+                    let url = if value.starts_with("http") {
+                        value
+                    } else {
+                        format!("https://sci-net.xyz{value}")
+                    };
+
+                    if !urls.contains(&url) {
+                        urls.push(url);
+                    }
+                }
+
+                rest = &rest[end..];
+            }
+        }
+
+        urls
+    }
+
+    fn between<'a>(value: &'a str, start: &str, end: &str) -> Option<&'a str> {
+        let start_index = value.find(start)? + start.len();
+        let rest = &value[start_index..];
+        let end_index = rest.find(end)?;
+
+        Some(&rest[..end_index])
     }
 }

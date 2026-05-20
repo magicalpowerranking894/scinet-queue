@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use browser::{SCINET_URL, detect_browser, profile_dir};
+use browser::{BrowserEngine, SCINET_URL, detect_browser, profile_dir};
 use cdp::{
     RequestRemoteState, RequestView, ScinetResponse, download_pdf, probe_current_session,
     probe_session, request_doi, search_doi, view_request,
@@ -20,6 +20,7 @@ use cdp::{
 use queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
 };
+use serde::Serialize;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -76,7 +77,13 @@ fn run() -> Result<(), String> {
             }
         }
         Some("list" | "ls") => {
+            let json = parse_json_flag("list", args)?;
             let entries = queue.list().map_err(|error| error.to_string())?;
+
+            if json {
+                print_json(&entries)?;
+                return Ok(());
+            }
 
             if entries.is_empty() {
                 println!("queue empty");
@@ -122,6 +129,7 @@ fn run() -> Result<(), String> {
             }
         }
         Some("session") => {
+            let json = parse_json_flag("session", args)?;
             let browser = detect_browser().map_err(|error| error.to_string())?;
             let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
             let cdp_browser = browser
@@ -129,16 +137,32 @@ fn run() -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
             let probe =
                 probe_session(cdp_browser.port(), SCINET_URL).map_err(|error| error.to_string())?;
+            let logged_in = probe.is_logged_in();
 
-            println!("browser {}", browser.path.display());
-            println!("engine {}", browser.engine);
-            println!("profile {}", profile_dir.display());
-            println!("queue {}", default_queue_path().display());
-            println!("url {}", probe.url);
-            println!("title {}", probe.title);
+            let output = SessionOutput {
+                browser: browser.path.display().to_string(),
+                engine: browser.engine.to_string(),
+                profile: profile_dir.display().to_string(),
+                queue: default_queue_path().display().to_string(),
+                url: probe.url,
+                title: probe.title,
+                logged_in,
+            };
+
+            if json {
+                print_json(&output)?;
+                return Ok(());
+            }
+
+            println!("browser {}", output.browser);
+            println!("engine {}", output.engine);
+            println!("profile {}", output.profile);
+            println!("queue {}", output.queue);
+            println!("url {}", output.url);
+            println!("title {}", output.title);
             println!(
                 "login {}",
-                if probe.is_logged_in() {
+                if output.logged_in {
                     "detected"
                 } else {
                     "not detected"
@@ -183,6 +207,19 @@ fn run() -> Result<(), String> {
                 Ok(responses)
             })?;
 
+            if request.json {
+                let output = dois
+                    .iter()
+                    .zip(responses.iter())
+                    .map(|(doi, response)| RequestOutput {
+                        doi: doi.clone(),
+                        response: response.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                print_json(&output)?;
+                return Ok(());
+            }
+
             for (doi, response) in dois.iter().zip(responses.iter()) {
                 if request.all {
                     println!("requested\t{doi}");
@@ -192,42 +229,73 @@ fn run() -> Result<(), String> {
             }
         }
         Some("watch") => {
+            let json = parse_json_flag("watch", args)?;
             let entries = queue.list().map_err(|error| error.to_string())?;
 
             if entries.is_empty() {
-                println!("queue empty");
+                if json {
+                    print_json(&Vec::<WatchOutput>::new())?;
+                } else {
+                    println!("queue empty");
+                }
                 return Ok(());
             }
 
             let views = with_scinet_views(entries.iter().map(|entry| entry.doi.as_str()))?;
+            let mut output = Vec::new();
 
             for (entry, view) in entries.iter().zip(views.iter()) {
                 let remote_state = view.remote_state();
                 let status =
                     update_status_from_remote(&queue, entry.status, &entry.doi, remote_state)?;
 
-                println!("{}\t{}\t{}", status, remote_state.as_str(), entry.doi);
+                output.push(WatchOutput {
+                    doi: entry.doi.clone(),
+                    status,
+                    remote_state,
+                });
+            }
+
+            if json {
+                print_json(&output)?;
+            } else {
+                for row in output {
+                    let status = row.status;
+                    let remote_state = row.remote_state;
+                    let doi = row.doi;
+
+                    println!("{}\t{}\t{}", status, remote_state.as_str(), doi);
+                }
             }
         }
         Some("view") => {
-            let Some(doi) = args.next() else {
-                return Err("view: missing DOI".to_string());
+            let view_args = parse_view(args)?;
+            let mut views = with_scinet_views(std::iter::once(view_args.doi.as_str()))?;
+            let view = views.remove(0);
+            let state = view.remote_state();
+            let output = ViewOutput {
+                url: view.url,
+                title: view.title,
+                state,
+                pdf_urls: view.pdf_urls,
+                text: view.text,
             };
 
-            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
-            let mut views = with_scinet_views(std::iter::once(doi.as_str()))?;
-            let view = views.remove(0);
+            if view_args.json {
+                print_json(&output)?;
+                return Ok(());
+            }
 
-            println!("url\t{}", view.url);
-            println!("title\t{}", view.title);
-            println!("state\t{}", view.remote_state().as_str());
-            println!("pdfs\t{}", view.pdf_urls.len());
+            println!("url\t{}", output.url);
+            println!("title\t{}", output.title);
+            println!("state\t{}", output.state.as_str());
+            println!("pdfs\t{}", output.pdf_urls.len());
 
-            for pdf_url in &view.pdf_urls {
+            for pdf_url in &output.pdf_urls {
                 println!("pdf\t{pdf_url}");
             }
 
-            println!("text\t{}", compact_text(&view.text));
+            println!("text\t{}", compact_text(&output.text));
         }
         Some("fetch") => {
             let fetch = parse_fetch(args)?;
@@ -281,6 +349,16 @@ fn run() -> Result<(), String> {
             }
 
             println!("approved\t{doi}");
+        }
+        Some("doctor") => {
+            let json = parse_json_flag("doctor", args)?;
+            let report = doctor_report(&queue);
+
+            if json {
+                print_json(&report)?;
+            } else {
+                print_doctor_report(&report);
+            }
         }
         Some(command) => {
             return Err(format!(
@@ -339,6 +417,27 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
 
 fn format_response(response: &ScinetResponse) -> Result<String, String> {
     serde_json::to_string_pretty(response).map_err(|error| error.to_string())
+}
+
+fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
+fn parse_json_flag(command: &str, args: impl Iterator<Item = String>) -> Result<bool, String> {
+    let mut json = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            unknown => return Err(format!("{command}: unknown option `{unknown}`")),
+        }
+    }
+
+    Ok(json)
 }
 
 fn compact_text(text: &str) -> String {
@@ -436,17 +535,20 @@ struct RequestArgs {
     doi: Option<String>,
     reward: u32,
     all: bool,
+    json: bool,
 }
 
 fn parse_request(args: impl Iterator<Item = String>) -> Result<RequestArgs, String> {
     let mut doi = None;
     let mut reward = 1;
     let mut all = false;
+    let mut json = false;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--all" => all = true,
+            "--json" => json = true,
             "--reward" | "-r" => {
                 let Some(value) = args.next() else {
                     return Err("request: missing value for --reward".to_string());
@@ -481,7 +583,12 @@ fn parse_request(args: impl Iterator<Item = String>) -> Result<RequestArgs, Stri
         return Err("request: missing DOI".to_string());
     }
 
-    Ok(RequestArgs { doi, reward, all })
+    Ok(RequestArgs {
+        doi,
+        reward,
+        all,
+        json,
+    })
 }
 
 fn request_dois(queue: &Queue, request: &RequestArgs) -> Result<Vec<String>, String> {
@@ -520,6 +627,38 @@ struct FetchArgs {
     out_dir: PathBuf,
     wait: bool,
     poll_secs: u64,
+}
+
+struct ViewArgs {
+    doi: String,
+    json: bool,
+}
+
+fn parse_view(args: impl Iterator<Item = String>) -> Result<ViewArgs, String> {
+    let mut doi = None;
+    let mut json = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            value if value.starts_with('-') => {
+                return Err(format!("view: unknown option `{value}`"));
+            }
+            value => {
+                if doi.is_some() {
+                    return Err(format!("view: unexpected argument `{value}`"));
+                }
+
+                doi = Some(normalize_doi(value).map_err(|error| error.to_string())?);
+            }
+        }
+    }
+
+    let Some(doi) = doi else {
+        return Err("view: missing DOI".to_string());
+    };
+
+    Ok(ViewArgs { doi, json })
 }
 
 struct ApproveArgs {
@@ -721,24 +860,279 @@ A tiny agent-friendly DOI queue for Sci-Net.
 
 Usage:
   snq login
-  snq session
+  snq session [--json]
   snq add <doi>...
   snq import <path|->
-  snq list
+  snq list [--json]
   snq remove <doi>
   snq check <doi>
-  snq request <doi|--all> --reward <n>
-  snq watch
-  snq view <doi>
+  snq request <doi|--all> --reward <n> [--json]
+  snq watch [--json]
+  snq view <doi> [--json]
   snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>]
   snq approve <doi> [--force]
+  snq doctor [--json]
 
 Options:
+      --json        Print machine-readable JSON where supported
       --no-wait     Open login browser without waiting for authentication
   -h, --help       Print help
   -V, --version    Print version
 "
     );
+}
+
+#[derive(Debug, Serialize)]
+struct SessionOutput {
+    browser: String,
+    engine: String,
+    profile: String,
+    queue: String,
+    url: String,
+    title: String,
+    logged_in: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RequestOutput {
+    doi: String,
+    response: ScinetResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct WatchOutput {
+    doi: String,
+    status: QueueStatus,
+    remote_state: RequestRemoteState,
+}
+
+#[derive(Debug, Serialize)]
+struct ViewOutput {
+    url: String,
+    title: String,
+    state: RequestRemoteState,
+    pdf_urls: Vec<String>,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorReport {
+    version: String,
+    scinet_url: String,
+    browser: DoctorBrowser,
+    profile: DoctorProfile,
+    queue: DoctorQueue,
+    session: DoctorSession,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorBrowser {
+    ok: bool,
+    engine: Option<String>,
+    path: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorProfile {
+    ok: bool,
+    path: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorQueue {
+    ok: bool,
+    path: String,
+    entries: Option<usize>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorSession {
+    ok: bool,
+    logged_in: Option<bool>,
+    url: Option<String>,
+    title: Option<String>,
+    message: String,
+}
+
+fn doctor_report(queue: &Queue) -> DoctorReport {
+    let queue_path = default_queue_path();
+    let queue_info = match queue.list() {
+        Ok(entries) => DoctorQueue {
+            ok: true,
+            path: queue_path.display().to_string(),
+            entries: Some(entries.len()),
+            message: "readable".to_string(),
+        },
+        Err(error) => DoctorQueue {
+            ok: false,
+            path: queue_path.display().to_string(),
+            entries: None,
+            message: error.to_string(),
+        },
+    };
+
+    let browser_result = detect_browser();
+    let browser_info = match &browser_result {
+        Ok(browser) => DoctorBrowser {
+            ok: true,
+            engine: Some(browser.engine.to_string()),
+            path: Some(browser.path.display().to_string()),
+            message: "found".to_string(),
+        },
+        Err(error) => DoctorBrowser {
+            ok: false,
+            engine: None,
+            path: None,
+            message: error.to_string(),
+        },
+    };
+
+    let (profile_info, session_info) = match browser_result {
+        Ok(browser) => match profile_dir(browser.engine) {
+            Ok(path) => {
+                let profile_info = DoctorProfile {
+                    ok: true,
+                    path: Some(path.display().to_string()),
+                    message: "resolved".to_string(),
+                };
+
+                if browser.engine != BrowserEngine::Chromium {
+                    (
+                        profile_info,
+                        DoctorSession {
+                            ok: false,
+                            logged_in: None,
+                            url: None,
+                            title: None,
+                            message: format!(
+                                "session probe is not implemented for {} yet",
+                                browser.engine
+                            ),
+                        },
+                    )
+                } else {
+                    let session_info = match browser.launch_cdp(&path) {
+                        Ok(cdp_browser) => match probe_session(cdp_browser.port(), SCINET_URL) {
+                            Ok(probe) => {
+                                let logged_in = probe.is_logged_in();
+
+                                DoctorSession {
+                                    ok: logged_in,
+                                    logged_in: Some(logged_in),
+                                    url: Some(probe.url),
+                                    title: Some(probe.title),
+                                    message: if logged_in {
+                                        "logged in".to_string()
+                                    } else {
+                                        "not logged in; run `snq login`".to_string()
+                                    },
+                                }
+                            }
+                            Err(error) => DoctorSession {
+                                ok: false,
+                                logged_in: None,
+                                url: None,
+                                title: None,
+                                message: error.to_string(),
+                            },
+                        },
+                        Err(error) => DoctorSession {
+                            ok: false,
+                            logged_in: None,
+                            url: None,
+                            title: None,
+                            message: error.to_string(),
+                        },
+                    };
+
+                    (profile_info, session_info)
+                }
+            }
+            Err(error) => (
+                DoctorProfile {
+                    ok: false,
+                    path: None,
+                    message: error.to_string(),
+                },
+                DoctorSession {
+                    ok: false,
+                    logged_in: None,
+                    url: None,
+                    title: None,
+                    message: "skipped; profile path unavailable".to_string(),
+                },
+            ),
+        },
+        Err(_) => (
+            DoctorProfile {
+                ok: false,
+                path: None,
+                message: "skipped; browser unavailable".to_string(),
+            },
+            DoctorSession {
+                ok: false,
+                logged_in: None,
+                url: None,
+                title: None,
+                message: "skipped; browser unavailable".to_string(),
+            },
+        ),
+    };
+
+    DoctorReport {
+        version: VERSION.to_string(),
+        scinet_url: SCINET_URL.to_string(),
+        browser: browser_info,
+        profile: profile_info,
+        queue: queue_info,
+        session: session_info,
+    }
+}
+
+fn print_doctor_report(report: &DoctorReport) {
+    println!("version\t{}", report.version);
+    println!("scinet\t{}", report.scinet_url);
+    println!(
+        "browser\t{}\t{}",
+        doctor_label(report.browser.ok),
+        report.browser.message
+    );
+    if let Some(path) = &report.browser.path {
+        println!("browser_path\t{path}");
+    }
+    if let Some(engine) = &report.browser.engine {
+        println!("browser_engine\t{engine}");
+    }
+    println!(
+        "profile\t{}\t{}",
+        doctor_label(report.profile.ok),
+        report.profile.message
+    );
+    if let Some(path) = &report.profile.path {
+        println!("profile_path\t{path}");
+    }
+    println!(
+        "queue\t{}\t{}\t{} entries\t{}",
+        doctor_label(report.queue.ok),
+        report.queue.path,
+        report.queue.entries.unwrap_or(0),
+        report.queue.message
+    );
+    println!(
+        "session\t{}\t{}",
+        doctor_label(report.session.ok),
+        report.session.message
+    );
+    if let Some(url) = &report.session.url {
+        println!("session_url\t{url}");
+    }
+}
+
+fn doctor_label(ok: bool) -> &'static str {
+    if ok { "ok" } else { "warn" }
 }
 
 #[cfg(test)]
@@ -787,6 +1181,7 @@ mod tests {
         assert!(args.doi.is_none());
         assert_eq!(args.reward, 3);
         assert!(args.all);
+        assert!(!args.json);
 
         assert_eq!(
             parse_request(
@@ -798,6 +1193,19 @@ mod tests {
             .reward,
             2,
         );
+    }
+
+    #[test]
+    fn request_accepts_json_flag() {
+        let args = parse_request(
+            ["--all", "--reward", "1", "--json"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        assert!(args.all);
+        assert!(args.json);
     }
 
     #[test]
@@ -875,6 +1283,7 @@ mod tests {
             doi: None,
             reward: 1,
             all: true,
+            json: false,
         };
 
         assert_eq!(
@@ -975,6 +1384,28 @@ mod tests {
 
         assert_eq!(args.doi.as_deref(), Some("10.1287/mnsc.2024.05040"));
         assert_eq!(args.out_dir, std::path::PathBuf::from("papers"));
+    }
+
+    #[test]
+    fn view_accepts_json_flag() {
+        let args = parse_view(
+            ["10.1287/mnsc.2024.05040", "--json"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(args.doi, "10.1287/mnsc.2024.05040");
+        assert!(args.json);
+        assert!(parse_view(std::iter::empty()).is_err());
+        assert!(parse_view(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn generic_json_flag_rejects_unknown_options() {
+        assert!(parse_json_flag("list", ["--json"].into_iter().map(str::to_string)).unwrap());
+        assert!(parse_json_flag("list", std::iter::empty()).is_ok());
+        assert!(parse_json_flag("list", ["--bad"].into_iter().map(str::to_string)).is_err());
     }
 
     #[test]
