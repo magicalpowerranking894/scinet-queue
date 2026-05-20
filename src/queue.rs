@@ -12,6 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const QUEUE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const QUEUE_LOCK_POLL: Duration = Duration::from_millis(50);
+#[cfg(windows)]
+const WINDOWS_STALE_LOCK_AFTER: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct QueueEntry {
@@ -361,6 +363,14 @@ impl QueueLock {
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if windows_lock_file_is_stale(path) {
+                        match fs::remove_file(path) {
+                            Ok(()) => continue,
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                            Err(error) => return Err(QueueError::Io(error)),
+                        }
+                    }
+
                     if start.elapsed() >= timeout {
                         return Err(QueueError::QueueLocked(path.to_path_buf()));
                     }
@@ -394,6 +404,25 @@ impl Drop for QueueLock {
 
 fn lock_token() -> String {
     format!("{}:{}", std::process::id(), unix_time_millis())
+}
+
+#[cfg(windows)]
+fn windows_lock_file_is_stale(path: &Path) -> bool {
+    if let Ok(contents) = fs::read_to_string(path) {
+        if let Some((_, millis)) = contents.trim().split_once(':') {
+            if let Ok(millis) = millis.parse::<u128>() {
+                return unix_time_millis().saturating_sub(millis)
+                    > WINDOWS_STALE_LOCK_AFTER.as_millis();
+            }
+        }
+    }
+
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .map(|age| age > WINDOWS_STALE_LOCK_AFTER)
+        .unwrap_or(false)
 }
 
 fn unix_time_millis() -> u128 {
