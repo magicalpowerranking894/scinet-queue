@@ -458,33 +458,38 @@ mod tests {
     #[test]
     fn queue_lock_rejects_cross_process_acquire() {
         const CHILD_ENV: &str = "SNQ_TEST_HOLD_QUEUE_LOCK";
+        const READY_ENV: &str = "SNQ_TEST_QUEUE_LOCK_READY";
 
-        if let Some(path) = std::env::var_os(CHILD_ENV) {
+        if let (Some(path), Some(ready_path)) =
+            (std::env::var_os(CHILD_ENV), std::env::var_os(READY_ENV))
+        {
             let path = PathBuf::from(path);
+            let ready_path = PathBuf::from(ready_path);
             let _lock = QueueLock::acquire(&path, Duration::from_secs(1)).unwrap();
+            fs::write(ready_path, "ready").unwrap();
             thread::sleep(Duration::from_secs(5));
             return;
         }
 
         let dir = std::env::temp_dir().join(format!("snq-lock-test-{}", std::process::id()));
         let path = dir.join("queue.lock");
+        let ready_path = dir.join("ready");
         let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
 
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
             .arg("queue::tests::queue_lock_rejects_cross_process_acquire")
             .arg("--nocapture")
             .env(CHILD_ENV, &path)
+            .env(READY_ENV, &ready_path)
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
 
         let start = Instant::now();
-        while fs::read_to_string(&path)
-            .map(|contents| contents.trim().is_empty())
-            .unwrap_or(true)
-        {
-            assert!(start.elapsed() < Duration::from_secs(2));
+        while !ready_path.exists() {
+            assert!(start.elapsed() < Duration::from_secs(15));
             thread::sleep(Duration::from_millis(10));
         }
 

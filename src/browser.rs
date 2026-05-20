@@ -5,12 +5,14 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::scinet::SCINET_URL;
 
 const BROWSER_ENV: &str = "SCINET_QUEUE_BROWSER";
+static LOCK_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Browser {
@@ -358,7 +360,8 @@ impl Drop for ProfileLock {
 }
 
 fn lock_token() -> String {
-    format!("{}:{}", std::process::id(), unix_time_millis())
+    let counter = LOCK_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}:{}:{counter}", std::process::id(), unix_time_millis())
 }
 
 fn remove_lock_if_owned(path: &Path, token: &str) {
