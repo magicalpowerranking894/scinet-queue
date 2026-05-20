@@ -178,11 +178,19 @@ impl fmt::Display for BrowserError {
                 write!(f, "{BROWSER_ENV} does not exist: {}", path.display())
             }
             BrowserError::ProfileLocked(path) => {
-                write!(
-                    f,
-                    "managed browser profile is already in use: {}; wait for the other snq command to finish",
-                    path.display()
-                )
+                if cfg!(windows) {
+                    write!(
+                        f,
+                        "managed browser profile lock exists: {}; close any snq command or managed browser using this profile, then remove the lock file if it is stale",
+                        path.display()
+                    )
+                } else {
+                    write!(
+                        f,
+                        "managed browser profile is already in use: {}; wait for the other snq command to finish",
+                        path.display()
+                    )
+                }
             }
             BrowserError::UnsupportedCdpEngine(engine) => {
                 write!(
@@ -614,6 +622,26 @@ mod tests {
         assert!(ProfileLock::acquire(&dir).is_ok());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn profile_lock_error_explains_stale_windows_lock_file() {
+        let path = PathBuf::from(r"C:\Users\snq\AppData\Local\profile\.snq-profile.lock");
+        let message = BrowserError::ProfileLocked(path).to_string();
+
+        assert!(message.contains("managed browser profile lock exists"));
+        assert!(message.contains("remove the lock file if it is stale"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn profile_lock_error_explains_live_unix_lock() {
+        let path = PathBuf::from("/tmp/snq-profile/.snq-profile.lock");
+        let message = BrowserError::ProfileLocked(path).to_string();
+
+        assert!(message.contains("managed browser profile is already in use"));
+        assert!(message.contains("wait for the other snq command to finish"));
     }
 
     #[test]
