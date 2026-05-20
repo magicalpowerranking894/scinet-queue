@@ -159,6 +159,7 @@ fn run() -> Result<(), String> {
                         return Err("not logged into Sci-Net; run `snq login` first".to_string());
                     }
 
+                    mark_requested(&queue, doi)?;
                     responses.push(response);
                 }
 
@@ -166,8 +167,6 @@ fn run() -> Result<(), String> {
             })?;
 
             for (doi, response) in dois.iter().zip(responses.iter()) {
-                mark_requested(&queue, doi)?;
-
                 if request.all {
                     println!("requested\t{doi}");
                 } else {
