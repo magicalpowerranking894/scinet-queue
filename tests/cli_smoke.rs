@@ -83,6 +83,23 @@ fn rejects_extra_trailing_arguments() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn request_all_json_prints_empty_array_for_empty_queue() {
+    let dir = temp_workspace("request-empty-json");
+
+    let request = snq()
+        .current_dir(&dir)
+        .args(["request", "--all", "--reward", "1", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(request.status.success());
+    assert_eq!(String::from_utf8_lossy(&request.stdout), "[]\n");
+    assert!(request.stderr.is_empty());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn unix_time() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

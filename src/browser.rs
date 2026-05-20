@@ -292,7 +292,7 @@ fn wait_for_devtools_port(
             }
 
             let value = contents.lines().next().unwrap_or_default().trim();
-            if !value.is_empty() {
+            if !value.is_empty() && value.parse::<u16>().is_err() {
                 return Err(BrowserError::InvalidDevtoolsPort {
                     path: path.to_path_buf(),
                     value: value.to_string(),
@@ -391,7 +391,14 @@ fn app_bundle_path(binary_path: &Path) -> Option<PathBuf> {
 }
 
 fn parse_devtools_port(contents: &str) -> Option<u16> {
-    contents.lines().next()?.trim().parse().ok()
+    let mut lines = contents.lines();
+    let port = lines.next()?.trim().parse().ok()?;
+
+    if lines.next()?.trim().is_empty() {
+        return None;
+    }
+
+    Some(port)
 }
 
 fn browser_candidates() -> Vec<Browser> {
@@ -537,6 +544,7 @@ mod tests {
             parse_devtools_port("9333\n/devtools/browser/abc\n"),
             Some(9333)
         );
+        assert_eq!(parse_devtools_port("9333\n"), None);
         assert_eq!(parse_devtools_port("nope\n/devtools/browser/abc\n"), None);
     }
 
@@ -602,6 +610,46 @@ for arg in "$@"; do
 done
 mkdir -p "$profile"
 : > "$profile/DevToolsActivePort"
+sleep 0.1
+printf '9222\n/devtools/browser/fake\n' > "$profile/DevToolsActivePort"
+sleep 60
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let browser = Browser {
+            engine: BrowserEngine::Chromium,
+            path: script,
+        };
+        let cdp = browser.launch_cdp(&profile).unwrap();
+
+        assert_eq!(cdp.port(), 9222);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cdp_launch_retries_partial_devtools_port_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = env::temp_dir().join(format!("snq-cdp-partial-port-test-{}", std::process::id()));
+        let profile = dir.join("profile");
+        let script = dir.join("fake-browser.sh");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) profile="${arg#--user-data-dir=}" ;;
+  esac
+done
+mkdir -p "$profile"
+printf '9' > "$profile/DevToolsActivePort"
 sleep 0.1
 printf '9222\n/devtools/browser/fake\n' > "$profile/DevToolsActivePort"
 sleep 60

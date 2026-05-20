@@ -190,6 +190,11 @@ pub fn run() -> Result<(), String> {
             let dois = request_dois(&queue, &request)?;
 
             if dois.is_empty() {
+                if request.json {
+                    print_json(&Vec::<RequestOutput>::new())?;
+                    return Ok(());
+                }
+
                 println!("no queued entries");
                 return Ok(());
             }

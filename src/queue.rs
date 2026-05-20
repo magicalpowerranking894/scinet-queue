@@ -456,18 +456,44 @@ mod tests {
     }
 
     #[test]
-    fn queue_lock_rejects_concurrent_acquire() {
+    fn queue_lock_rejects_cross_process_acquire() {
+        const CHILD_ENV: &str = "SNQ_TEST_HOLD_QUEUE_LOCK";
+
+        if let Some(path) = std::env::var_os(CHILD_ENV) {
+            let path = PathBuf::from(path);
+            let _lock = QueueLock::acquire(&path, Duration::from_secs(1)).unwrap();
+            thread::sleep(Duration::from_secs(5));
+            return;
+        }
+
         let dir = std::env::temp_dir().join(format!("snq-lock-test-{}", std::process::id()));
         let path = dir.join("queue.lock");
         let _ = fs::remove_dir_all(&dir);
 
-        let lock = QueueLock::acquire(&path, Duration::from_millis(1)).unwrap();
-        let second = QueueLock::acquire(&path, Duration::from_millis(1));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("queue::tests::queue_lock_rejects_cross_process_acquire")
+            .arg("--nocapture")
+            .env(CHILD_ENV, &path)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
 
+        let start = Instant::now();
+        while fs::read_to_string(&path)
+            .map(|contents| contents.trim().is_empty())
+            .unwrap_or(true)
+        {
+            assert!(start.elapsed() < Duration::from_secs(2));
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let second = QueueLock::acquire(&path, Duration::from_millis(1));
         assert!(matches!(second, Err(QueueError::QueueLocked(_))));
 
-        drop(lock);
-        assert!(QueueLock::acquire(&path, Duration::from_millis(1)).is_ok());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(QueueLock::acquire(&path, Duration::from_secs(1)).is_ok());
 
         let _ = fs::remove_dir_all(dir);
     }
