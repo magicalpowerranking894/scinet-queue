@@ -196,12 +196,13 @@ fn missing_browser_preference_errors_before_launch() {
     let dir = temp_workspace("missing-browser-preference");
     let browser = dir.join("deleted-firefox");
     fs::create_dir_all(dir.join(".snq")).unwrap();
+    let preference = serde_json::json!({
+        "engine": "firefox",
+        "path": browser,
+    });
     fs::write(
         dir.join(".snq/browser.json"),
-        format!(
-            "{{\"engine\":\"firefox\",\"path\":\"{}\"}}\n",
-            browser.display()
-        ),
+        format!("{}\n", serde_json::to_string(&preference).unwrap()),
     )
     .unwrap();
 
