@@ -427,18 +427,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 
             if fetch.json {
                 print_json(&outputs)?;
-            } else if outputs
-                .iter()
-                .all(|output| output.path.as_deref().is_none())
-            {
-                for output in outputs {
-                    println!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi);
-                }
             } else {
-                for output in outputs {
-                    if let Some(path) = output.path {
-                        println!("{path}");
-                    }
+                for output in &outputs {
+                    println!("{}", fetch_text_line(output));
                 }
             }
         }
@@ -753,6 +744,13 @@ where
     }
 }
 
+fn fetch_text_line(output: &FetchOutput) -> String {
+    match output.path.as_deref() {
+        Some(path) => path.to_string(),
+        None => format!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi),
+    }
+}
+
 fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
     match queue
         .set_status(doi, QueueStatus::Requested)
@@ -819,16 +817,18 @@ fn ensure_can_approve(queue: &Queue, doi: &str, force: bool) -> Result<(), Strin
     }
 
     let entries = queue.list().map_err(|error| error.to_string())?;
+    let Some(entry) = entries.iter().find(|entry| entry.doi == doi) else {
+        return Err(format!(
+            "approve: {doi} is not in the queue; run `snq fetch {doi}` first or pass --force"
+        ));
+    };
 
-    if entries
-        .iter()
-        .any(|entry| entry.doi == doi && entry.status == QueueStatus::Fetched)
-    {
-        Ok(())
-    } else {
-        Err(format!(
-            "approve: {doi} is not fetched; run `snq fetch {doi}` first or pass --force"
-        ))
+    match entry.status {
+        QueueStatus::Fetched => Ok(()),
+        QueueStatus::Approved => Err(format!("approve: {doi} is already approved")),
+        status => Err(format!(
+            "approve: {doi} is {status}, not fetched; run `snq fetch {doi}` first or pass --force"
+        )),
     }
 }
 
@@ -998,6 +998,33 @@ mod tests {
     }
 
     #[test]
+    fn fetch_text_output_keeps_mixed_batch_statuses() {
+        let outputs = [
+            FetchOutput {
+                doi: "10.1000/one".to_string(),
+                status: FetchOutputStatus::Fetched,
+                remote_state: RequestRemoteState::Pdf,
+                path: Some("papers/one.pdf".to_string()),
+            },
+            FetchOutput {
+                doi: "10.1000/two".to_string(),
+                status: FetchOutputStatus::NoPdf,
+                remote_state: RequestRemoteState::Working,
+                path: None,
+            },
+        ];
+        let lines = outputs.iter().map(fetch_text_line).collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec![
+                "papers/one.pdf".to_string(),
+                "no-pdf\tworking\t10.1000/two".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn successful_request_is_marked_before_later_failure() {
         let dir = std::env::temp_dir().join(format!(
             "snq-request-partial-failure-test-{}",
@@ -1037,13 +1064,35 @@ mod tests {
         let queue = Queue::new(path);
 
         queue.add("10.1000/snq-example").unwrap();
-        assert!(ensure_can_approve(&queue, "10.1000/snq-example", false).is_err());
+        let error = ensure_can_approve(&queue, "10.1000/snq-example", false).unwrap_err();
+        assert!(error.contains("is queued, not fetched"));
 
         queue
             .set_status("10.1000/snq-example", QueueStatus::Fetched)
             .unwrap();
         assert!(ensure_can_approve(&queue, "10.1000/snq-example", false).is_ok());
         assert!(ensure_can_approve(&queue, "10.1000/snq-alt", true).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn approve_reports_missing_and_already_approved_entries() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-approve-states-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        let missing = ensure_can_approve(&queue, "10.1000/missing", false).unwrap_err();
+        assert!(missing.contains("is not in the queue"));
+
+        queue.add("10.1000/snq-example").unwrap();
+        queue
+            .set_status("10.1000/snq-example", QueueStatus::Approved)
+            .unwrap();
+
+        let approved = ensure_can_approve(&queue, "10.1000/snq-example", false).unwrap_err();
+        assert!(approved.contains("is already approved"));
 
         let _ = fs::remove_dir_all(dir);
     }

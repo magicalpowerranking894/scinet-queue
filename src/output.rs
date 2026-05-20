@@ -27,7 +27,7 @@ pub(crate) fn print_help(version: &str) {
         "\
 snq {version}
 
-A tiny agent-friendly DOI queue for Sci-Net.
+A tiny scriptable queue for Sci-Net paper requests.
 
 Usage:
   snq login [--no-wait]

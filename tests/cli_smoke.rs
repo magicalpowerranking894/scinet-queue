@@ -332,7 +332,12 @@ fn approve_json_errors_are_machine_readable() {
     assert!(approve.stdout.is_empty());
     assert!(!String::from_utf8_lossy(&approve.stderr).contains("snq:"));
     let value: serde_json::Value = serde_json::from_slice(&approve.stderr).unwrap();
-    assert!(value["error"].as_str().unwrap().contains("is not fetched"));
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("is queued, not fetched")
+    );
 
     fs::remove_dir_all(dir).unwrap();
 }

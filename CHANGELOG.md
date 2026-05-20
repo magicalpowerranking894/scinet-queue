@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed text output for mixed batch fetches so pending DOIs stay visible when
+  another DOI downloads successfully.
+- Made `approve` errors distinguish missing, not-yet-fetched, and already
+  approved entries.
 - Fixed batch `fetch --wait` so one available PDF does not stop polling for
   the remaining targeted DOIs.
 - Limited `snq watch` to requested and working entries so inactive queue state
