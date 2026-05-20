@@ -91,6 +91,25 @@ impl Queue {
         Ok(RemoveResult::Removed(doi))
     }
 
+    pub fn set_status(
+        &self,
+        raw_doi: &str,
+        status: QueueStatus,
+    ) -> Result<StatusResult, QueueError> {
+        let doi = normalize_doi(raw_doi)?;
+        let mut entries = self.read()?;
+
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.doi == doi) {
+            entry.status = status;
+            entry.updated_at = unix_time();
+            self.write(&entries)?;
+
+            return Ok(StatusResult::Updated(doi));
+        }
+
+        Ok(StatusResult::NotFound(doi))
+    }
+
     fn read(&self) -> Result<Vec<QueueEntry>, QueueError> {
         if !self.path.exists() {
             return Ok(Vec::new());
@@ -147,6 +166,12 @@ pub enum AddResult {
 #[derive(Debug, Eq, PartialEq)]
 pub enum RemoveResult {
     Removed(String),
+    NotFound(String),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum StatusResult {
+    Updated(String),
     NotFound(String),
 }
 
@@ -292,6 +317,28 @@ mod tests {
             RemoveResult::Removed("10.1287/mnsc.2024.05040".to_string())
         );
         assert!(after_remove.is_empty());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn queue_updates_status() {
+        let dir = std::env::temp_dir().join(format!("snq-status-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1287/mnsc.2024.05040").unwrap();
+        let result = queue
+            .set_status("10.1287/mnsc.2024.05040", QueueStatus::Requested)
+            .unwrap();
+        let entries = queue.list().unwrap();
+
+        assert_eq!(
+            result,
+            StatusResult::Updated("10.1287/mnsc.2024.05040".to_string())
+        );
+        assert_eq!(entries[0].status, QueueStatus::Requested);
+        assert!(entries[0].updated_at >= entries[0].created_at);
 
         let _ = fs::remove_dir_all(dir);
     }

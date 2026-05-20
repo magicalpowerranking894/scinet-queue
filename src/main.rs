@@ -6,8 +6,10 @@ use std::env;
 use std::process;
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
-use cdp::{probe_session, request_doi, search_doi};
-use queue::{AddResult, Queue, RemoveResult, default_queue_path, normalize_doi};
+use cdp::{ScinetResponse, probe_session, request_doi, search_doi};
+use queue::{
+    AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -100,20 +102,8 @@ fn run() -> Result<(), String> {
             };
 
             let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
-            let browser = detect_browser().map_err(|error| error.to_string())?;
-            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-            let cdp_browser = browser
-                .launch_cdp(&profile_dir)
-                .map_err(|error| error.to_string())?;
-            let response = search_doi(cdp_browser.port(), SCINET_URL, &doi)
-                .map_err(|error| error.to_string())?;
-
-            if response.looks_logged_out() {
-                return Err("not logged into Sci-Net; run `snq login` first".to_string());
-            }
-
-            let json =
-                serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?;
+            let response = with_scinet_session(|port| search_doi(port, SCINET_URL, &doi))?;
+            let json = format_response(&response)?;
 
             println!("{json}");
         }
@@ -124,20 +114,21 @@ fn run() -> Result<(), String> {
 
             let reward = parse_reward(args)?;
             let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
-            let browser = detect_browser().map_err(|error| error.to_string())?;
-            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-            let cdp_browser = browser
-                .launch_cdp(&profile_dir)
-                .map_err(|error| error.to_string())?;
-            let response = request_doi(cdp_browser.port(), SCINET_URL, &doi, reward)
-                .map_err(|error| error.to_string())?;
+            let response = with_scinet_session(|port| request_doi(port, SCINET_URL, &doi, reward))?;
+            let json = format_response(&response)?;
 
-            if response.looks_logged_out() {
-                return Err("not logged into Sci-Net; run `snq login` first".to_string());
+            match queue
+                .set_status(&doi, QueueStatus::Requested)
+                .map_err(|error| error.to_string())?
+            {
+                StatusResult::Updated(_) => {}
+                StatusResult::NotFound(_) => {
+                    let _ = queue.add(&doi).map_err(|error| error.to_string())?;
+                    let _ = queue
+                        .set_status(&doi, QueueStatus::Requested)
+                        .map_err(|error| error.to_string())?;
+                }
             }
-
-            let json =
-                serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?;
 
             println!("{json}");
         }
@@ -152,6 +143,28 @@ fn run() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn with_scinet_session<F>(operation: F) -> Result<ScinetResponse, String>
+where
+    F: FnOnce(u16) -> Result<ScinetResponse, cdp::CdpError>,
+{
+    let browser = detect_browser().map_err(|error| error.to_string())?;
+    let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+    let cdp_browser = browser
+        .launch_cdp(&profile_dir)
+        .map_err(|error| error.to_string())?;
+    let response = operation(cdp_browser.port()).map_err(|error| error.to_string())?;
+
+    if response.looks_logged_out() {
+        return Err("not logged into Sci-Net; run `snq login` first".to_string());
+    }
+
+    Ok(response)
+}
+
+fn format_response(response: &ScinetResponse) -> Result<String, String> {
+    serde_json::to_string_pretty(response).map_err(|error| error.to_string())
 }
 
 fn parse_reward(args: impl Iterator<Item = String>) -> Result<u32, String> {
