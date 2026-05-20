@@ -8,12 +8,15 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket, connect};
 
 const BIDI_IO_TIMEOUT: Duration = Duration::from_secs(15);
+const BIDI_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const BIDI_CONNECT_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub(crate) enum BidiError {
     Io(io::Error),
     Json(serde_json::Error),
     WebSocket(tungstenite::Error),
+    ConnectTimeout(u16),
     UnexpectedResponse(Value),
 }
 
@@ -23,6 +26,9 @@ impl fmt::Display for BidiError {
             BidiError::Io(error) => write!(f, "{error}"),
             BidiError::Json(error) => write!(f, "{error}"),
             BidiError::WebSocket(error) => write!(f, "{error}"),
+            BidiError::ConnectTimeout(port) => {
+                write!(f, "timed out connecting to BiDi on 127.0.0.1:{port}")
+            }
             BidiError::UnexpectedResponse(value) => {
                 write!(f, "unexpected BiDi response: {value}")
             }
@@ -56,8 +62,25 @@ pub(crate) struct BidiConnection {
 
 impl BidiConnection {
     pub(crate) fn connect(port: u16) -> Result<Self, BidiError> {
+        Self::connect_with_timeout(port, BIDI_CONNECT_TIMEOUT)
+    }
+
+    fn connect_with_timeout(port: u16, timeout: Duration) -> Result<Self, BidiError> {
         let ws_url = format!("ws://127.0.0.1:{port}/session");
-        let (mut socket, _) = connect(&ws_url)?;
+        let start = std::time::Instant::now();
+
+        let mut socket = loop {
+            match connect(&ws_url) {
+                Ok((socket, _)) => break socket,
+                Err(_) => {
+                    if start.elapsed() >= timeout {
+                        return Err(BidiError::ConnectTimeout(port));
+                    }
+
+                    thread::sleep(BIDI_CONNECT_POLL);
+                }
+            }
+        };
         set_socket_timeout(&mut socket)?;
 
         let mut connection = Self {
@@ -172,4 +195,176 @@ fn set_socket_timeout(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Resu
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn bidi_connection_ignores_events_and_evaluates_json() {
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let port = start_fake_bidi_server(methods.clone(), false);
+
+        let mut connection =
+            BidiConnection::connect_with_timeout(port, Duration::from_secs(2)).unwrap();
+        connection.navigate("https://sci-net.xyz/").unwrap();
+        let value = connection
+            .evaluate_json("({ answer: 42, ok: true })")
+            .unwrap();
+
+        assert_eq!(value, json!({ "answer": 42, "ok": true }));
+        assert_eq!(
+            *methods.lock().unwrap(),
+            vec![
+                "session.new",
+                "browsingContext.create",
+                "browsingContext.navigate",
+                "script.evaluate",
+                "script.evaluate",
+            ]
+        );
+    }
+
+    #[test]
+    fn bidi_connection_reports_error_response() {
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let port = start_fake_bidi_server(methods, true);
+
+        let error = BidiConnection::connect_with_timeout(port, Duration::from_secs(2))
+            .err()
+            .unwrap();
+
+        assert!(matches!(error, BidiError::UnexpectedResponse(_)));
+        assert!(error.to_string().contains("session not created"));
+    }
+
+    fn start_fake_bidi_server(methods: Arc<Mutex<Vec<&'static str>>>, fail_session: bool) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+
+            loop {
+                let Ok(message) = socket.read() else {
+                    break;
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let id = request.get("id").and_then(Value::as_u64).unwrap();
+                let method = request.get("method").and_then(Value::as_str).unwrap();
+
+                match method {
+                    "session.new" => {
+                        methods.lock().unwrap().push("session.new");
+
+                        if fail_session {
+                            send_response(
+                                &mut socket,
+                                json!({
+                                    "id": id,
+                                    "type": "error",
+                                    "error": "session not created",
+                                    "message": "session not created"
+                                }),
+                            );
+                            continue;
+                        }
+
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "type": "event",
+                                "method": "log.entryAdded",
+                                "params": {}
+                            }),
+                        );
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "id": id,
+                                "type": "success",
+                                "result": {}
+                            }),
+                        );
+                    }
+                    "browsingContext.create" => {
+                        methods.lock().unwrap().push("browsingContext.create");
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "id": id,
+                                "type": "success",
+                                "result": { "context": "ctx-1" }
+                            }),
+                        );
+                    }
+                    "browsingContext.navigate" => {
+                        methods.lock().unwrap().push("browsingContext.navigate");
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "id": id,
+                                "type": "success",
+                                "result": {}
+                            }),
+                        );
+                    }
+                    "script.evaluate" => {
+                        methods.lock().unwrap().push("script.evaluate");
+                        let expression = request
+                            .get("params")
+                            .and_then(|params| params.get("expression"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let value = if expression.contains("document.readyState") {
+                            "\"complete\""
+                        } else {
+                            "{\"answer\":42,\"ok\":true}"
+                        };
+
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "id": id,
+                                "type": "success",
+                                "result": {
+                                    "realm": "realm-1",
+                                    "result": {
+                                        "type": "string",
+                                        "value": value
+                                    }
+                                }
+                            }),
+                        );
+                    }
+                    _ => {
+                        send_response(
+                            &mut socket,
+                            json!({
+                                "id": id,
+                                "type": "error",
+                                "error": "unknown command",
+                                "message": method
+                            }),
+                        );
+                    }
+                }
+            }
+        });
+
+        port
+    }
+
+    fn send_response(socket: &mut tungstenite::WebSocket<TcpStream>, value: Value) {
+        socket
+            .send(Message::Text(value.to_string().into()))
+            .unwrap();
+    }
 }
