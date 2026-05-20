@@ -297,6 +297,10 @@ impl fmt::Display for BrowserEngine {
 pub(crate) enum BrowserError {
     Io(std::io::Error),
     Json(serde_json::Error),
+    PreferenceJson {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
     NoProjectDirs,
     NoBrowserFound,
     EnvBrowserNotFound(PathBuf),
@@ -308,7 +312,10 @@ pub(crate) enum BrowserError {
     BrowserExited,
     BidiPortTimeout(u16),
     DevtoolsPortTimeout(PathBuf),
-    InvalidDevtoolsPort { path: PathBuf, value: String },
+    InvalidDevtoolsPort {
+        path: PathBuf,
+        value: String,
+    },
 }
 
 impl fmt::Display for BrowserError {
@@ -316,6 +323,12 @@ impl fmt::Display for BrowserError {
         match self {
             BrowserError::Io(error) => write!(f, "{error}"),
             BrowserError::Json(error) => write!(f, "{error}"),
+            BrowserError::PreferenceJson { path, source } => write!(
+                f,
+                "could not parse browser preference {}: {}; run `snq browsers --pick`, `snq browsers --set <path>`, or `snq browsers --clear`",
+                path.display(),
+                source
+            ),
             BrowserError::NoProjectDirs => write!(f, "could not resolve user data directory"),
             BrowserError::NoBrowserFound => write!(
                 f,
@@ -477,6 +490,13 @@ pub(crate) fn browser_choices() -> Vec<BrowserChoice> {
     choices
 }
 
+pub(crate) fn browser_preference_error() -> Option<String> {
+    match read_browser_preference() {
+        Ok(_) => None,
+        Err(error) => Some(error.to_string()),
+    }
+}
+
 pub(crate) fn browser_preference_path() -> PathBuf {
     PathBuf::from(BROWSER_PREFERENCE_FILE)
 }
@@ -581,7 +601,7 @@ fn preferred_browser() -> Result<Option<Browser>, BrowserError> {
 
 fn read_browser_preference() -> Result<Option<BrowserPreference>, BrowserError> {
     let path = browser_preference_path();
-    let contents = match fs::read_to_string(path) {
+    let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(BrowserError::Io(error)),
@@ -589,7 +609,7 @@ fn read_browser_preference() -> Result<Option<BrowserPreference>, BrowserError> 
 
     serde_json::from_str(&contents)
         .map(Some)
-        .map_err(BrowserError::Json)
+        .map_err(|source| BrowserError::PreferenceJson { path, source })
 }
 
 fn resolve_browser(browser: Browser) -> Option<Browser> {

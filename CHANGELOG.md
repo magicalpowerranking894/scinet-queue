@@ -4,6 +4,8 @@
 
 - Fixed text output for mixed batch fetches so pending DOIs stay visible when
   another DOI downloads successfully.
+- Made malformed `.snq/browser.json` preferences visible in `snq browsers` and
+  authenticated command errors.
 - Made `approve` errors distinguish missing, not-yet-fetched, and already
   approved entries.
 - Fixed batch `fetch --wait` so one available PDF does not stop polling for

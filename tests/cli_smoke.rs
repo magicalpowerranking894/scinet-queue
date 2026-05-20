@@ -227,6 +227,41 @@ fn missing_browser_preference_errors_before_launch() {
 }
 
 #[test]
+fn invalid_browser_preference_is_reported_and_recoverable() {
+    let dir = temp_workspace("invalid-browser-preference");
+    fs::create_dir_all(dir.join(".snq")).unwrap();
+    fs::write(dir.join(".snq/browser.json"), "{not json\n").unwrap();
+
+    let list = snq()
+        .current_dir(&dir)
+        .args(["browsers", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(list.status.success());
+    assert!(list.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let error = value["preference_error"].as_str().unwrap();
+    assert!(error.contains("could not parse browser preference .snq/browser.json"));
+    assert!(error.contains("snq browsers --clear"));
+
+    let session = snq()
+        .current_dir(&dir)
+        .args(["session", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!session.status.success());
+    assert!(session.stdout.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&session.stderr).unwrap();
+    let error = value["error"].as_str().unwrap();
+    assert!(error.contains("could not parse browser preference .snq/browser.json"));
+    assert!(error.contains("snq browsers --clear"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn fetch_json_prints_empty_array_for_empty_queue() {
     let dir = temp_workspace("fetch-empty-json");
 

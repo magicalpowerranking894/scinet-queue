@@ -9,8 +9,9 @@ use crate::args::{
 };
 use crate::browser::{
     BROWSER_ENV, Browser, BrowserChoice, BrowserError, available_browser_candidates,
-    browser_choices, browser_from_path, browser_preference_exists, browser_preference_path,
-    clear_browser_preference, detect_browser, profile_dir, save_browser_preference,
+    browser_choices, browser_from_path, browser_preference_error, browser_preference_exists,
+    browser_preference_path, clear_browser_preference, detect_browser, profile_dir,
+    save_browser_preference,
 };
 use crate::doctor::{doctor_report, print_doctor_report};
 use crate::output::{
@@ -498,6 +499,7 @@ fn browser_list_output() -> BrowserListOutput {
     BrowserListOutput {
         override_env: BROWSER_ENV.to_string(),
         preference_path: browser_preference_path().display().to_string(),
+        preference_error: browser_preference_error(),
         selected,
         browsers,
     }
@@ -535,6 +537,9 @@ fn print_browser_list(output: &BrowserListOutput) {
     }
 
     println!("preference {}", browser_preference_path().display());
+    if let Some(error) = &output.preference_error {
+        println!("preference-error {error}");
+    }
     println!("override {BROWSER_ENV}=/path/to/browser");
 }
 

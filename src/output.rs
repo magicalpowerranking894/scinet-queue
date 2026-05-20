@@ -71,6 +71,7 @@ pub(crate) struct SessionOutput {
 pub(crate) struct BrowserListOutput {
     pub(crate) override_env: String,
     pub(crate) preference_path: String,
+    pub(crate) preference_error: Option<String>,
     pub(crate) selected: Option<BrowserChoiceOutput>,
     pub(crate) browsers: Vec<BrowserChoiceOutput>,
 }
