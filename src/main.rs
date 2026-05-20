@@ -6,8 +6,8 @@ use std::env;
 use std::process;
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
-use cdp::probe_session;
-use queue::{AddResult, Queue, RemoveResult, default_queue_path};
+use cdp::{probe_session, search_doi};
+use queue::{AddResult, Queue, RemoveResult, default_queue_path, normalize_doi};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -94,7 +94,30 @@ fn run() -> Result<(), String> {
                 }
             );
         }
-        Some("check" | "request" | "watch" | "fetch" | "approve") => {
+        Some("check") => {
+            let Some(doi) = args.next() else {
+                return Err("check: missing DOI".to_string());
+            };
+
+            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
+            let browser = detect_browser().map_err(|error| error.to_string())?;
+            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+            let cdp_browser = browser
+                .launch_cdp(&profile_dir)
+                .map_err(|error| error.to_string())?;
+            let response = search_doi(cdp_browser.port(), SCINET_URL, &doi)
+                .map_err(|error| error.to_string())?;
+
+            if response.looks_logged_out() {
+                return Err("not logged into Sci-Net; run `snq login` first".to_string());
+            }
+
+            let json =
+                serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?;
+
+            println!("{json}");
+        }
+        Some("request" | "watch" | "fetch" | "approve") => {
             return Err("command is scaffolded but not implemented yet".to_string());
         }
         Some(command) => {

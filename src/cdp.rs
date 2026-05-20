@@ -14,11 +14,50 @@ pub struct SessionProbe {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScinetResponse {
+    pub ok: bool,
+    pub status: u16,
+    pub body: Value,
+}
+
 impl SessionProbe {
     pub fn is_logged_in(&self) -> bool {
         let text = self.text.to_ascii_lowercase();
 
-        text.contains("tokens") || text.contains("logout") || text.contains("library")
+        if text.contains("username")
+            && text.contains("password")
+            && (text.contains("no account yet") || text.contains("join"))
+        {
+            return false;
+        }
+
+        if text.contains("no account yet")
+            || text.contains("scientific communication support network")
+        {
+            return false;
+        }
+
+        text.contains("logout")
+            || text.contains("my requests")
+            || text.contains("my library")
+            || text.contains("user")
+            || (text.contains("tokens") && text.contains("request"))
+    }
+}
+
+impl ScinetResponse {
+    pub fn looks_logged_out(&self) -> bool {
+        self.body
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| {
+                let text = text.to_ascii_lowercase();
+                text.contains("username")
+                    && text.contains("password")
+                    && text.contains("no account yet")
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -65,12 +104,40 @@ pub fn probe_session(port: u16, url: &str) -> Result<SessionProbe, CdpError> {
     let target = page_target(port)?;
     let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
 
-    cdp.call("Page.navigate", json!({ "url": url }))?;
-    cdp.wait_for_ready_state()?;
+    cdp.navigate(url)?;
 
     let value = cdp.evaluate_json(
         "({ title: document.title, url: location.href, text: (document.body && document.body.innerText || '').slice(0, 4000) })",
     )?;
+
+    serde_json::from_value(value).map_err(CdpError::Json)
+}
+
+pub fn search_doi(port: u16, url: &str, doi: &str) -> Result<ScinetResponse, CdpError> {
+    let target = page_target(port)?;
+    let mut cdp = CdpConnection::connect(&target.web_socket_debugger_url)?;
+    let doi = serde_json::to_string(doi)?;
+
+    cdp.navigate(url)?;
+
+    let value = cdp.evaluate_json(&format!(
+        r#"(async () => {{
+            const response = await fetch('/search', {{
+                method: 'POST',
+                credentials: 'include',
+                headers: {{ 'content-type': 'application/json' }},
+                body: JSON.stringify({{ doi: {doi} }})
+            }});
+            const text = await response.text();
+            let body;
+            try {{
+                body = JSON.parse(text);
+            }} catch (_) {{
+                body = {{ text }};
+            }}
+            return {{ ok: response.ok, status: response.status, body }};
+        }})()"#
+    ))?;
 
     serde_json::from_value(value).map_err(CdpError::Json)
 }
@@ -113,6 +180,11 @@ impl CdpConnection {
             .and_then(|result| result.get("value"))
             .cloned()
             .ok_or(CdpError::UnexpectedResponse(response))
+    }
+
+    fn navigate(&mut self, url: &str) -> Result<(), CdpError> {
+        self.call("Page.navigate", json!({ "url": url }))?;
+        self.wait_for_ready_state()
     }
 
     fn wait_for_ready_state(&mut self) -> Result<(), CdpError> {
@@ -189,9 +261,22 @@ mod tests {
         let probe = SessionProbe {
             title: "Sci-Net".to_string(),
             url: "https://sci-net.xyz/".to_string(),
-            text: "login sign up".to_string(),
+            text: "scientific communication support network No account yet? Join decentralized tokens reward request".to_string(),
         };
 
         assert!(!probe.is_logged_in());
+    }
+
+    #[test]
+    fn detects_logged_out_search_response() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "text": "<input name='user' placeholder='username'><input placeholder='password'>No account yet?"
+            }),
+        };
+
+        assert!(response.looks_logged_out());
     }
 }

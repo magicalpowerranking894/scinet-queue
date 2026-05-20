@@ -7,7 +7,8 @@ The binary is `snq`.
 
 ## Status
 
-Early development. The local queue and Chromium session probe are supported.
+Early development. The local queue, Chromium session probe, and Sci-Net search
+check are supported.
 
 ## Install
 
@@ -23,6 +24,7 @@ snq session
 snq add 10.1287/mnsc.2024.05040
 snq list
 snq remove 10.1287/mnsc.2024.05040
+snq check 10.1287/mnsc.2024.05040
 ```
 
 `snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
@@ -51,6 +53,9 @@ taking over the user's normal browser.
 
 `snq session` starts the managed profile headlessly and checks whether Sci-Net
 loads with a logged-in session.
+
+`snq check <doi>` calls Sci-Net's search endpoint from that browser session and
+prints the JSON response.
 
 This avoids decrypting cookies from Chrome, Firefox, Edge, Brave, Zen, or the
 operating system keychain. Importing an existing browser profile is outside the
