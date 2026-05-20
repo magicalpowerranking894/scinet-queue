@@ -17,6 +17,39 @@ Run the package check before a release or when changing crate metadata:
 cargo package --locked
 ```
 
+## Release Process
+
+Releases are tagged from `main` after the full CI matrix passes.
+
+1. Update `Cargo.toml` and `CHANGELOG.md` for the new version.
+2. Run the local release checks:
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --locked
+cargo package --locked
+```
+
+3. Create and push a version tag:
+
+```sh
+git tag -s v0.1.1 -m "v0.1.1"
+git push origin v0.1.1
+```
+
+4. Wait for the release workflow to upload archives for:
+
+```text
+x86_64-unknown-linux-gnu
+x86_64-apple-darwin
+aarch64-apple-darwin
+x86_64-pc-windows-msvc
+```
+
+5. Check the release assets and `SHA256SUMS` before publishing the draft
+   release.
+
 ## Pull Requests
 
 - Keep pull requests focused.

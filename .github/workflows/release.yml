@@ -1,0 +1,115 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - run: rustup toolchain install stable --profile minimal
+      - run: rustup default stable
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo test --locked
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package Unix archive
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="snq-${TAG}-${TARGET}.tar.gz"
+          stage="target/release-package/snq-${TAG}-${TARGET}"
+
+          mkdir -p "$stage"
+          cp "target/${TARGET}/release/snq" "$stage/"
+          cp README.md LICENSE CHANGELOG.md "$stage/"
+          tar -czf "$asset" -C "$stage" .
+
+      - name: Package Windows archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $asset = "snq-$($env:TAG)-$($env:TARGET).zip"
+          $stage = "target\release-package\snq-$($env:TAG)-$($env:TARGET)"
+
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target\$($env:TARGET)\release\snq.exe" $stage
+          Copy-Item README.md, LICENSE, CHANGELOG.md $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath $asset -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snq-${{ env.TAG }}-${{ matrix.target }}
+          path: snq-${{ env.TAG }}-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum snq-"${TAG}"-* > SHA256SUMS
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes --draft --verify-tag
+          fi

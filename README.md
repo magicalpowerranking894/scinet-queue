@@ -18,9 +18,26 @@ profile, or approve tokens automatically.
 
 ## Install
 
-Requires Rust 1.85 or newer.
+Download a precompiled `snq` binary from the
+[latest GitHub release](https://github.com/tivris/scinet-queue/releases/latest).
 
-Install the released tag from GitHub:
+Release archives are published for:
+
+- `x86_64-unknown-linux-gnu`
+- `x86_64-apple-darwin`
+- `aarch64-apple-darwin`
+- `x86_64-pc-windows-msvc`
+
+Unpack the archive for your platform, move `snq` or `snq.exe` somewhere on
+your `PATH`, and check it:
+
+```sh
+snq --help
+```
+
+Each release includes `SHA256SUMS` for the uploaded archives.
+
+You can also install from source with Rust 1.85 or newer:
 
 ```sh
 cargo install --locked --git https://github.com/tivris/scinet-queue --tag v0.1.0

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added a GitHub Actions release workflow for precompiled `snq` archives and
+  `SHA256SUMS`.
+- Documented release binary installation and the release process.
+
 ## 0.1.0 - 2026-05-20
 
 - Added a workspace-local DOI queue.
