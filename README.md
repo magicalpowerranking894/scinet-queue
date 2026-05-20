@@ -286,7 +286,9 @@ After login, authenticated commands reuse that managed profile headlessly. Use
 `snq login --no-wait` to leave the login browser open; finish login and close
 that browser before running `snq session`, `snq fetch`, or other authenticated
 commands. The printed PID is the launcher process; on macOS the long-lived app
-process may have a different PID.
+process may have a different PID. While that login browser remains open, it
+owns the managed profile and later authenticated commands may fail until it is
+closed.
 
 `snq session` starts the managed profile headlessly and checks whether Sci-Net
 loads with a logged-in session:

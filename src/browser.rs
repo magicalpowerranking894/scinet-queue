@@ -355,7 +355,7 @@ impl fmt::Display for BrowserError {
                 } else {
                     write!(
                         f,
-                        "managed browser profile is already in use: {}; wait for the other snq command to finish",
+                        "managed browser profile is already in use: {}; close any browser opened by `snq login --no-wait` or wait for the other snq command to finish",
                         path.display()
                     )
                 }
@@ -373,7 +373,10 @@ impl fmt::Display for BrowserError {
                 )
             }
             BrowserError::BrowserExited => {
-                write!(f, "browser exited before automation became available")
+                write!(
+                    f,
+                    "browser exited before automation became available; close any browser opened by `snq login --no-wait` and retry"
+                )
             }
             BrowserError::BidiPortTimeout(port) => {
                 write!(f, "timed out waiting for BiDi on 127.0.0.1:{port}")
@@ -1066,7 +1069,16 @@ mod tests {
         let message = BrowserError::ProfileLocked(path).to_string();
 
         assert!(message.contains("managed browser profile is already in use"));
+        assert!(message.contains("close any browser opened by `snq login --no-wait`"));
         assert!(message.contains("wait for the other snq command to finish"));
+    }
+
+    #[test]
+    fn browser_exited_error_explains_open_login_browser() {
+        let message = BrowserError::BrowserExited.to_string();
+
+        assert!(message.contains("browser exited before automation became available"));
+        assert!(message.contains("close any browser opened by `snq login --no-wait`"));
     }
 
     #[test]
