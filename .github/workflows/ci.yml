@@ -13,7 +13,7 @@ jobs:
     name: rust
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - run: rustup default stable
       - run: cargo fmt --all --check
