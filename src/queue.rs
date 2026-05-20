@@ -589,6 +589,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn queue_lock_ignores_leftover_lock_file() {
         let dir =
             std::env::temp_dir().join(format!("snq-lock-leftover-test-{}", std::process::id()));
@@ -597,6 +598,27 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(&path, "99999999:1\n").unwrap();
 
+        assert!(QueueLock::acquire(&path, Duration::from_millis(1)).is_ok());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn queue_lock_preserves_leftover_windows_lock_file() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-lock-leftover-test-{}", std::process::id()));
+        let path = dir.join("queue.lock");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "99999999:1\n").unwrap();
+
+        assert!(matches!(
+            QueueLock::acquire(&path, Duration::from_millis(1)),
+            Err(QueueError::QueueLocked(_))
+        ));
+
+        fs::remove_file(&path).unwrap();
         assert!(QueueLock::acquire(&path, Duration::from_millis(1)).is_ok());
 
         let _ = fs::remove_dir_all(dir);
