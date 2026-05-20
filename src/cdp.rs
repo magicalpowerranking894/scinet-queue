@@ -31,6 +31,14 @@ pub struct RequestView {
     pub pdf_urls: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RequestRemoteState {
+    LoggedOut,
+    Pdf,
+    Working,
+    Pending,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PdfDownload {
     pub bytes: Vec<u8>,
@@ -44,6 +52,22 @@ impl RequestView {
 
     pub fn has_pdf(&self) -> bool {
         !self.pdf_urls.is_empty()
+    }
+
+    pub fn remote_state(&self) -> RequestRemoteState {
+        if self.looks_logged_out() {
+            return RequestRemoteState::LoggedOut;
+        }
+
+        if self.has_pdf() {
+            return RequestRemoteState::Pdf;
+        }
+
+        if looks_like_working_text(&self.text) {
+            return RequestRemoteState::Working;
+        }
+
+        RequestRemoteState::Pending
     }
 }
 
@@ -85,6 +109,24 @@ impl ScinetResponse {
 fn looks_like_login_text(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("username") && text.contains("password") && text.contains("no account yet")
+}
+
+fn looks_like_working_text(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("working on solving")
+        || text.contains("will upload pdf")
+        || text.contains("is working on")
+}
+
+impl RequestRemoteState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RequestRemoteState::LoggedOut => "logged-out",
+            RequestRemoteState::Pdf => "pdf",
+            RequestRemoteState::Working => "working",
+            RequestRemoteState::Pending => "pending",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -453,5 +495,19 @@ mod tests {
 
         assert!(view.has_pdf());
         assert!(!view.looks_logged_out());
+        assert_eq!(view.remote_state(), RequestRemoteState::Pdf);
+    }
+
+    #[test]
+    fn request_view_reports_working_state() {
+        let view = RequestView {
+            title: "Sci-Net".to_string(),
+            url: "https://sci-net.xyz/view/10.x".to_string(),
+            text: "This member is working on solving the request and will upload PDF in 30 minutes"
+                .to_string(),
+            pdf_urls: Vec::new(),
+        };
+
+        assert_eq!(view.remote_state(), RequestRemoteState::Working);
     }
 }

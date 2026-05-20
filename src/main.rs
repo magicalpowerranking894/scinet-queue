@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
 use cdp::{
-    RequestView, ScinetResponse, approve_doi, download_pdf, probe_session, request_doi, search_doi,
-    view_request,
+    RequestRemoteState, RequestView, ScinetResponse, approve_doi, download_pdf, probe_session,
+    request_doi, search_doi, view_request,
 };
 use queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
@@ -175,15 +175,11 @@ fn run() -> Result<(), String> {
             let views = with_scinet_views(entries.iter().map(|entry| entry.doi.as_str()))?;
 
             for (entry, view) in entries.iter().zip(views.iter()) {
-                let state = if view.has_pdf() {
-                    "pdf"
-                } else if view.looks_logged_out() {
-                    "logged-out"
-                } else {
-                    "pending"
-                };
+                let remote_state = view.remote_state();
+                let status =
+                    update_status_from_remote(&queue, entry.status, &entry.doi, remote_state)?;
 
-                println!("{}\t{}\t{}", entry.status, state, entry.doi);
+                println!("{}\t{}\t{}", status, remote_state.as_str(), entry.doi);
             }
         }
         Some("fetch") => {
@@ -293,6 +289,25 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
 
 fn format_response(response: &ScinetResponse) -> Result<String, String> {
     serde_json::to_string_pretty(response).map_err(|error| error.to_string())
+}
+
+fn update_status_from_remote(
+    queue: &Queue,
+    status: QueueStatus,
+    doi: &str,
+    remote_state: RequestRemoteState,
+) -> Result<QueueStatus, String> {
+    if remote_state == RequestRemoteState::Working
+        && matches!(status, QueueStatus::Queued | QueueStatus::Requested)
+    {
+        queue
+            .set_status(doi, QueueStatus::Working)
+            .map_err(|error| error.to_string())?;
+
+        Ok(QueueStatus::Working)
+    } else {
+        Ok(status)
+    }
 }
 
 fn read_import_text(path: &str) -> Result<String, String> {
@@ -550,6 +565,32 @@ mod tests {
                 "10.1093/rfs/hhaa075".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn remote_working_state_promotes_requested_queue_entry() {
+        let dir = std::env::temp_dir().join(format!("snq-watch-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1287/mnsc.2024.05040").unwrap();
+        queue
+            .set_status("10.1287/mnsc.2024.05040", QueueStatus::Requested)
+            .unwrap();
+
+        let status = update_status_from_remote(
+            &queue,
+            QueueStatus::Requested,
+            "10.1287/mnsc.2024.05040",
+            RequestRemoteState::Working,
+        )
+        .unwrap();
+        let entries = queue.list().unwrap();
+
+        assert_eq!(status, QueueStatus::Working);
+        assert_eq!(entries[0].status, QueueStatus::Working);
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
