@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use browser::{SCINET_URL, detect_browser, profile_dir};
 use cdp::{
-    RequestRemoteState, RequestView, ScinetResponse, approve_doi, download_pdf,
-    probe_current_session, probe_session, request_doi, search_doi, view_request,
+    RequestRemoteState, RequestView, ScinetResponse, download_pdf, probe_current_session,
+    probe_session, request_doi, search_doi, view_request,
 };
 use queue::{
     AddResult, Queue, QueueStatus, RemoveResult, StatusResult, default_queue_path, normalize_doi,
@@ -209,6 +209,26 @@ fn run() -> Result<(), String> {
                 println!("{}\t{}\t{}", status, remote_state.as_str(), entry.doi);
             }
         }
+        Some("view") => {
+            let Some(doi) = args.next() else {
+                return Err("view: missing DOI".to_string());
+            };
+
+            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
+            let mut views = with_scinet_views(std::iter::once(doi.as_str()))?;
+            let view = views.remove(0);
+
+            println!("url\t{}", view.url);
+            println!("title\t{}", view.title);
+            println!("state\t{}", view.remote_state().as_str());
+            println!("pdfs\t{}", view.pdf_urls.len());
+
+            for pdf_url in &view.pdf_urls {
+                println!("pdf\t{pdf_url}");
+            }
+
+            println!("text\t{}", compact_text(&view.text));
+        }
         Some("fetch") => {
             let fetch = parse_fetch(args)?;
             let dois = fetch_dois(&queue, fetch.doi.as_deref())?;
@@ -251,8 +271,6 @@ fn run() -> Result<(), String> {
             let approve = parse_approve(args)?;
             let doi = approve.doi;
             ensure_can_approve(&queue, &doi, approve.force)?;
-            let response = with_scinet_session(|port| approve_doi(port, SCINET_URL, &doi))?;
-            let json = format_response(&response)?;
 
             match queue
                 .set_status(&doi, QueueStatus::Approved)
@@ -262,7 +280,7 @@ fn run() -> Result<(), String> {
                 StatusResult::NotFound(_) => {}
             }
 
-            println!("{json}");
+            println!("approved\t{doi}");
         }
         Some(command) => {
             return Err(format!(
@@ -321,6 +339,13 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
 
 fn format_response(response: &ScinetResponse) -> Result<String, String> {
     serde_json::to_string_pretty(response).map_err(|error| error.to_string())
+}
+
+fn compact_text(text: &str) -> String {
+    text.split_whitespace()
+        .take(120)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 struct LoginArgs {
@@ -667,7 +692,7 @@ fn output_path(out_dir: &Path, doi: &str, pdf_url: &str) -> PathBuf {
 
 fn pdf_filename(doi: &str, pdf_url: &str) -> String {
     let tail = pdf_url
-        .split('?')
+        .split(['?', '#'])
         .next()
         .and_then(|url| url.rsplit('/').next())
         .filter(|name| name.to_ascii_lowercase().ends_with(".pdf"))
@@ -704,6 +729,7 @@ Usage:
   snq check <doi>
   snq request <doi|--all> --reward <n>
   snq watch
+  snq view <doi>
   snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>]
   snq approve <doi> [--force]
 
@@ -728,6 +754,19 @@ mod tests {
                 .wait
         );
         assert!(parse_login(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn compact_text_collapses_whitespace_and_truncates() {
+        let text = (0..130)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let compact = compact_text(&text);
+
+        assert_eq!(compact.split_whitespace().count(), 120);
+        assert!(compact.starts_with("word0 word1"));
+        assert!(!compact.contains("word129"));
     }
 
     #[test]
@@ -950,6 +989,13 @@ mod tests {
             pdf_filename(
                 "10.1287/mnsc.2024.05040",
                 "https://sci-net.xyz/storage/abc/Product Variety.pdf?token=x"
+            ),
+            "Product-Variety.pdf"
+        );
+        assert_eq!(
+            pdf_filename(
+                "10.1287/mnsc.2024.05040",
+                "https://sci-net.xyz/storage/abc/Product Variety.pdf#view=FitH"
             ),
             "Product-Variety.pdf"
         );
