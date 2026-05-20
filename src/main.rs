@@ -161,42 +161,35 @@ fn run() -> Result<(), String> {
             }
         }
         Some("fetch") => {
-            let Some(doi) = args.next() else {
-                return Err("fetch: missing DOI".to_string());
-            };
-            let doi = normalize_doi(&doi).map_err(|error| error.to_string())?;
-            let out_dir = parse_out_dir(args)?;
-            let mut views = with_scinet_views(std::iter::once(doi.as_str()))?;
-            let view = views.remove(0);
+            let fetch = parse_fetch(args)?;
+            let dois = fetch_dois(&queue, fetch.doi.as_deref())?;
 
-            if view.looks_logged_out() {
-                return Err("not logged into Sci-Net; run `snq login` first".to_string());
+            if dois.is_empty() {
+                println!("queue empty");
+                return Ok(());
             }
 
-            let Some(pdf_url) = view.pdf_urls.first() else {
-                return Err(format!("fetch: no PDF available for {doi}"));
-            };
-            let browser = detect_browser().map_err(|error| error.to_string())?;
-            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-            let cdp_browser = browser
-                .launch_cdp(&profile_dir)
-                .map_err(|error| error.to_string())?;
-            let download =
-                download_pdf(cdp_browser.port(), pdf_url).map_err(|error| error.to_string())?;
-            let out_path = output_path(&out_dir, &doi, pdf_url);
+            let outputs = with_scinet_port(|port| {
+                let mut outputs = Vec::new();
 
-            fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
-            fs::write(&out_path, download.bytes).map_err(|error| error.to_string())?;
+                for doi in dois {
+                    match fetch_one(&queue, port, &doi, &fetch.out_dir) {
+                        Ok(Some(path)) => outputs.push(path),
+                        Ok(None) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
 
-            match queue
-                .set_status(&doi, QueueStatus::Fetched)
-                .map_err(|error| error.to_string())?
-            {
-                StatusResult::Updated(_) => {}
-                StatusResult::NotFound(_) => {}
+                Ok(outputs)
+            })?;
+
+            if outputs.is_empty() {
+                println!("no PDFs available");
+            } else {
+                for path in outputs {
+                    println!("{}", path.display());
+                }
             }
-
-            println!("{}", out_path.display());
         }
         Some("approve") => {
             let Some(doi) = args.next() else {
@@ -231,21 +224,21 @@ fn with_scinet_session<F>(operation: F) -> Result<ScinetResponse, String>
 where
     F: FnOnce(u16) -> Result<ScinetResponse, cdp::CdpError>,
 {
-    let browser = detect_browser().map_err(|error| error.to_string())?;
-    let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
-    let cdp_browser = browser
-        .launch_cdp(&profile_dir)
-        .map_err(|error| error.to_string())?;
-    let response = operation(cdp_browser.port()).map_err(|error| error.to_string())?;
+    with_scinet_port(|port| {
+        let response = operation(port).map_err(|error| error.to_string())?;
 
-    if response.looks_logged_out() {
-        return Err("not logged into Sci-Net; run `snq login` first".to_string());
-    }
+        if response.looks_logged_out() {
+            return Err("not logged into Sci-Net; run `snq login` first".to_string());
+        }
 
-    Ok(response)
+        Ok(response)
+    })
 }
 
-fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<RequestView>, String> {
+fn with_scinet_port<F, T>(operation: F) -> Result<T, String>
+where
+    F: FnOnce(u16) -> Result<T, String>,
+{
     let browser = detect_browser().map_err(|error| error.to_string())?;
     let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
     let cdp_browser = browser
@@ -257,15 +250,19 @@ fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<Requ
         return Err("not logged into Sci-Net; run `snq login` first".to_string());
     }
 
-    let mut views = Vec::new();
+    operation(cdp_browser.port())
+}
 
-    for doi in dois {
-        views.push(
-            view_request(cdp_browser.port(), SCINET_URL, doi).map_err(|error| error.to_string())?,
-        );
-    }
+fn with_scinet_views<'a>(dois: impl Iterator<Item = &'a str>) -> Result<Vec<RequestView>, String> {
+    with_scinet_port(|port| {
+        let mut views = Vec::new();
 
-    Ok(views)
+        for doi in dois {
+            views.push(view_request(port, SCINET_URL, doi).map_err(|error| error.to_string())?);
+        }
+
+        Ok(views)
+    })
 }
 
 fn format_response(response: &ScinetResponse) -> Result<String, String> {
@@ -298,7 +295,13 @@ fn parse_reward(args: impl Iterator<Item = String>) -> Result<u32, String> {
     Ok(reward)
 }
 
-fn parse_out_dir(args: impl Iterator<Item = String>) -> Result<std::path::PathBuf, String> {
+struct FetchArgs {
+    doi: Option<String>,
+    out_dir: PathBuf,
+}
+
+fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArgs, String> {
+    let mut doi = None;
     let mut out_dir = std::path::PathBuf::from("papers");
     let mut args = args.peekable();
 
@@ -311,11 +314,82 @@ fn parse_out_dir(args: impl Iterator<Item = String>) -> Result<std::path::PathBu
 
                 out_dir = value.into();
             }
-            unknown => return Err(format!("fetch: unknown option `{unknown}`")),
+            value if value.starts_with('-') => {
+                return Err(format!("fetch: unknown option `{value}`"));
+            }
+            value => {
+                if doi.is_some() {
+                    return Err(format!("fetch: unexpected argument `{value}`"));
+                }
+
+                doi = Some(normalize_doi(value).map_err(|error| error.to_string())?);
+            }
         }
     }
 
-    Ok(out_dir)
+    Ok(FetchArgs { doi, out_dir })
+}
+
+fn fetch_dois(queue: &Queue, doi: Option<&str>) -> Result<Vec<String>, String> {
+    if let Some(doi) = doi {
+        return Ok(vec![normalize_doi(doi).map_err(|error| error.to_string())?]);
+    }
+
+    let entries = queue.list().map_err(|error| error.to_string())?;
+
+    Ok(entries
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                QueueStatus::Queued | QueueStatus::Requested | QueueStatus::Working
+            )
+        })
+        .map(|entry| entry.doi)
+        .collect())
+}
+
+fn fetch_one(
+    queue: &Queue,
+    port: u16,
+    doi: &str,
+    out_dir: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let view = view_request(port, SCINET_URL, doi).map_err(|error| error.to_string())?;
+
+    if view.looks_logged_out() {
+        return Err("not logged into Sci-Net; run `snq login` first".to_string());
+    }
+
+    let Some(pdf_url) = view.pdf_urls.first() else {
+        return Ok(None);
+    };
+    let download = download_pdf(port, pdf_url).map_err(|error| error.to_string())?;
+
+    validate_pdf(&download.bytes)?;
+
+    let out_path = output_path(out_dir, doi, pdf_url);
+
+    fs::create_dir_all(out_dir).map_err(|error| error.to_string())?;
+    fs::write(&out_path, download.bytes).map_err(|error| error.to_string())?;
+
+    match queue
+        .set_status(doi, QueueStatus::Fetched)
+        .map_err(|error| error.to_string())?
+    {
+        StatusResult::Updated(_) => {}
+        StatusResult::NotFound(_) => {}
+    }
+
+    Ok(Some(out_path))
+}
+
+fn validate_pdf(bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(b"%PDF-") {
+        Ok(())
+    } else {
+        Err("fetch: downloaded file is not a PDF".to_string())
+    }
 }
 
 fn output_path(out_dir: &Path, doi: &str, pdf_url: &str) -> PathBuf {
@@ -360,7 +434,7 @@ Usage:
   snq check <doi>
   snq request <doi> --reward <n>
   snq watch
-  snq fetch [--out <dir>]
+  snq fetch [<doi>] [--out <dir>]
   snq approve <doi>
 
 Options:
@@ -401,7 +475,7 @@ mod tests {
     #[test]
     fn out_dir_defaults_to_papers() {
         assert_eq!(
-            parse_out_dir(std::iter::empty()).unwrap(),
+            parse_fetch(std::iter::empty()).unwrap().out_dir,
             std::path::PathBuf::from("papers")
         );
     }
@@ -409,19 +483,42 @@ mod tests {
     #[test]
     fn out_dir_accepts_long_and_short_flags() {
         assert_eq!(
-            parse_out_dir(["--out", "inbox"].into_iter().map(str::to_string)).unwrap(),
+            parse_fetch(["--out", "inbox"].into_iter().map(str::to_string))
+                .unwrap()
+                .out_dir,
             std::path::PathBuf::from("inbox")
         );
         assert_eq!(
-            parse_out_dir(["-o", "papers"].into_iter().map(str::to_string)).unwrap(),
+            parse_fetch(["-o", "papers"].into_iter().map(str::to_string))
+                .unwrap()
+                .out_dir,
             std::path::PathBuf::from("papers")
         );
     }
 
     #[test]
     fn out_dir_rejects_missing_and_unknown_values() {
-        assert!(parse_out_dir(["--out"].into_iter().map(str::to_string)).is_err());
-        assert!(parse_out_dir(["--bad"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_fetch(["--out"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_fetch(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn fetch_accepts_optional_doi() {
+        let args = parse_fetch(
+            ["10.1287/mnsc.2024.05040", "--out", "papers"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(args.doi.as_deref(), Some("10.1287/mnsc.2024.05040"));
+        assert_eq!(args.out_dir, std::path::PathBuf::from("papers"));
+    }
+
+    #[test]
+    fn pdf_validation_rejects_non_pdf_bytes() {
+        assert!(validate_pdf(b"%PDF-1.7\n").is_ok());
+        assert!(validate_pdf(b"<html>").is_err());
     }
 
     #[test]
