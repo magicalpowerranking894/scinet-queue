@@ -317,8 +317,11 @@ pub(crate) enum BrowserError {
     NoProjectDirs,
     NoBrowserFound,
     EnvBrowserNotFound(PathBuf),
+    EnvBrowserNotUsable(PathBuf),
     BrowserPathNotFound(PathBuf),
+    BrowserPathNotUsable(PathBuf),
     PreferenceBrowserNotFound(PathBuf),
+    PreferenceBrowserNotUsable(PathBuf),
     ProfileLocked(PathBuf),
     UnsupportedCdpEngine(BrowserEngine),
     UnsupportedBidiEngine(BrowserEngine),
@@ -350,12 +353,29 @@ impl fmt::Display for BrowserError {
             BrowserError::EnvBrowserNotFound(path) => {
                 write!(f, "{BROWSER_ENV} does not exist: {}", path.display())
             }
+            BrowserError::EnvBrowserNotUsable(path) => write!(
+                f,
+                "{BROWSER_ENV} is not an executable browser path: {}",
+                path.display()
+            ),
             BrowserError::BrowserPathNotFound(path) => {
                 write!(f, "browser path does not exist: {}", path.display())
+            }
+            BrowserError::BrowserPathNotUsable(path) => {
+                write!(
+                    f,
+                    "browser path is not an executable file: {}",
+                    path.display()
+                )
             }
             BrowserError::PreferenceBrowserNotFound(path) => write!(
                 f,
                 "configured browser does not exist: {}; run `snq browsers --pick`, `snq browsers --set <path>`, or `snq browsers --clear`",
+                path.display()
+            ),
+            BrowserError::PreferenceBrowserNotUsable(path) => write!(
+                f,
+                "configured browser is not an executable file: {}; run `snq browsers --pick`, `snq browsers --set <path>`, or `snq browsers --clear`",
                 path.display()
             ),
             BrowserError::ProfileLocked(path) => {

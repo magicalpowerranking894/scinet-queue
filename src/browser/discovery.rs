@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::{Browser, BrowserEngine, BrowserError};
@@ -49,10 +51,13 @@ pub(crate) fn detect_browser() -> Result<Browser, BrowserError> {
             return Err(BrowserError::EnvBrowserNotFound(path));
         }
 
-        return Ok(Browser {
+        let browser = Browser {
             engine: infer_engine(&path),
             path,
-        });
+        };
+
+        return resolve_browser(browser.clone())
+            .ok_or(BrowserError::EnvBrowserNotUsable(browser.path));
     }
 
     if let Some(browser) = preferred_browser()? {
@@ -68,11 +73,15 @@ pub(crate) fn detect_browser() -> Result<Browser, BrowserError> {
 pub(crate) fn browser_choices() -> Vec<BrowserChoice> {
     if let Some(path) = env::var_os(BROWSER_ENV) {
         let path = PathBuf::from(path);
-        let available = path.exists();
-
-        return vec![BrowserChoice {
+        let browser = Browser {
             engine: infer_engine(&path),
             path,
+        };
+        let available = resolve_browser(browser.clone()).is_some();
+
+        return vec![BrowserChoice {
+            engine: browser.engine,
+            path: browser.path,
             source: BrowserChoiceSource::Env,
             available,
             selected: available,
@@ -82,10 +91,14 @@ pub(crate) fn browser_choices() -> Vec<BrowserChoice> {
     let mut choices = Vec::new();
     let has_preference = match read_browser_preference() {
         Ok(Some(preference)) => {
-            let available = preference.path.exists();
-            choices.push(BrowserChoice {
+            let browser = Browser {
                 engine: preference.engine,
                 path: preference.path,
+            };
+            let available = resolve_browser(browser.clone()).is_some();
+            choices.push(BrowserChoice {
+                engine: browser.engine,
+                path: browser.path,
                 source: BrowserChoiceSource::Preference,
                 available,
                 selected: available,
@@ -147,7 +160,13 @@ pub(crate) fn browser_from_path(path: PathBuf) -> Result<Browser, BrowserError> 
         path,
     };
 
-    resolve_browser(browser).ok_or(BrowserError::BrowserPathNotFound(original_path))
+    resolve_browser(browser).ok_or_else(|| {
+        if original_path.exists() {
+            BrowserError::BrowserPathNotUsable(original_path)
+        } else {
+            BrowserError::BrowserPathNotFound(original_path)
+        }
+    })
 }
 
 pub(crate) fn available_browser_candidates() -> Vec<Browser> {
@@ -220,10 +239,14 @@ fn preferred_browser() -> Result<Option<Browser>, BrowserError> {
         return Err(BrowserError::PreferenceBrowserNotFound(preference.path));
     }
 
-    Ok(Some(Browser {
+    let browser = Browser {
         engine: preference.engine,
         path: preference.path,
-    }))
+    };
+
+    resolve_browser(browser.clone())
+        .map(Some)
+        .ok_or(BrowserError::PreferenceBrowserNotUsable(browser.path))
 }
 
 fn read_browser_preference() -> Result<Option<BrowserPreference>, BrowserError> {
@@ -241,7 +264,7 @@ fn read_browser_preference() -> Result<Option<BrowserPreference>, BrowserError> 
 
 fn resolve_browser(browser: Browser) -> Option<Browser> {
     if browser.path.components().count() > 1 || browser.path.is_absolute() {
-        return browser.path.exists().then_some(browser);
+        return usable_browser_path(&browser.path).map(|path| Browser { path, ..browser });
     }
 
     find_in_path(&browser.path).map(|path| Browser { path, ..browser })
@@ -253,7 +276,7 @@ fn find_in_path(command: &Path) -> Option<PathBuf> {
     for dir in env::split_paths(&paths) {
         let candidate = dir.join(command);
 
-        if candidate.exists() {
+        if usable_browser_path(&candidate).is_some() {
             return Some(candidate);
         }
 
@@ -261,13 +284,51 @@ fn find_in_path(command: &Path) -> Option<PathBuf> {
         {
             let candidate = candidate.with_extension("exe");
 
-            if candidate.exists() {
+            if usable_browser_path(&candidate).is_some() {
                 return Some(candidate);
             }
         }
     }
 
     None
+}
+
+fn usable_browser_path(path: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = app_bundle_executable(path) {
+        return Some(path);
+    }
+
+    is_executable_file(path).then(|| path.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_executable(path: &Path) -> Option<PathBuf> {
+    if path.extension().and_then(|value| value.to_str()) != Some("app") || !path.is_dir() {
+        return None;
+    }
+
+    let executable_dir = path.join("Contents/MacOS");
+
+    fs::read_dir(executable_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| is_executable_file(path))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+
+    metadata.is_file() && (metadata.permissions().mode() & 0o111) != 0
+}
+
+#[cfg(windows)]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn browser_candidates() -> Vec<Browser> {
@@ -373,6 +434,8 @@ fn firefox_app(path: &str) -> Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn infers_firefox_like_browsers() {
@@ -406,5 +469,55 @@ mod tests {
         };
 
         assert!(resolve_browser(browser).is_none());
+    }
+
+    #[test]
+    fn browser_from_path_rejects_directories() {
+        let dir = env::temp_dir().join(format!("snq-browser-dir-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        assert!(matches!(
+            browser_from_path(dir.clone()),
+            Err(BrowserError::BrowserPathNotUsable(_))
+        ));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn browser_from_path_rejects_non_executable_files() {
+        let path = env::temp_dir().join(format!("snq-browser-file-test-{}", std::process::id()));
+        fs::write(&path, "").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&path, permissions).unwrap();
+
+        assert!(matches!(
+            browser_from_path(path.clone()),
+            Err(BrowserError::BrowserPathNotUsable(_))
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn browser_from_path_accepts_executable_files() {
+        let path = env::temp_dir().join(format!(
+            "snq-browser-executable-test-{}",
+            std::process::id()
+        ));
+        fs::write(&path, "").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).unwrap();
+
+        let browser = browser_from_path(path.clone()).unwrap();
+
+        assert_eq!(browser.path, path);
+
+        let _ = fs::remove_file(browser.path);
     }
 }

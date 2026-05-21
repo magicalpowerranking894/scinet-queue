@@ -1,4 +1,6 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 fn snq() -> Command {
@@ -10,6 +12,17 @@ fn temp_workspace(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("snq-{name}-{}-{}", std::process::id(), unix_time()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn write_fake_browser(path: &std::path::Path) {
+    fs::write(path, "").unwrap();
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 }
 
 #[test]
@@ -133,7 +146,7 @@ fn browsers_json_reports_env_override() {
 fn browsers_set_saves_workspace_preference() {
     let dir = temp_workspace("browsers-set");
     let browser = dir.join("fake-firefox");
-    fs::write(&browser, "").unwrap();
+    write_fake_browser(&browser);
 
     let set = snq()
         .current_dir(&dir)
