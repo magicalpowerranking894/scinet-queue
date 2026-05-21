@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reorganized app, browser, and Sci-Net code into module folders for cleaner
+  long-term ownership boundaries.
 - Synced local queue state when Sci-Net rejects a request for a DOI whose
   request page already exists remotely.
 - Closed waited `snq login` browser sessions gracefully after login detection so

@@ -929,10 +929,10 @@ mod tests {
 
     fn fixture_view(name: &str) -> RequestView {
         let html = match name {
-            "logged_out.html" => include_str!("../tests/fixtures/scinet/logged_out.html"),
-            "pending.html" => include_str!("../tests/fixtures/scinet/pending.html"),
-            "working.html" => include_str!("../tests/fixtures/scinet/working.html"),
-            "solved.html" => include_str!("../tests/fixtures/scinet/solved.html"),
+            "logged_out.html" => include_str!("../../tests/fixtures/scinet/logged_out.html"),
+            "pending.html" => include_str!("../../tests/fixtures/scinet/pending.html"),
+            "working.html" => include_str!("../../tests/fixtures/scinet/working.html"),
+            "solved.html" => include_str!("../../tests/fixtures/scinet/solved.html"),
             _ => unreachable!("unknown fixture"),
         };
 

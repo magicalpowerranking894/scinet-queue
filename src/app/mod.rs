@@ -3,9 +3,12 @@ use std::io::{self, IsTerminal, Write};
 use std::thread;
 use std::time::Duration;
 
+mod fetch;
+mod request;
+
 use crate::args::{
-    BrowsersAction, RequestArgs, parse_approve, parse_browsers, parse_fetch, parse_json_flag,
-    parse_login, parse_request, parse_view,
+    BrowsersAction, parse_approve, parse_browsers, parse_fetch, parse_json_flag, parse_login,
+    parse_request, parse_view,
 };
 use crate::browser::{
     BROWSER_ENV, Browser, BrowserChoice, BrowserError, available_browser_candidates,
@@ -15,21 +18,18 @@ use crate::browser::{
 };
 use crate::doctor::{doctor_report, print_doctor_report};
 use crate::output::{
-    ApproveOutput, BrowserChoiceOutput, BrowserListOutput, FetchOutput, FetchOutputStatus,
-    RequestOutput, SessionOutput, ViewOutput, WatchOutput, compact_text, format_response,
-    print_help, print_json,
+    ApproveOutput, BrowserChoiceOutput, BrowserListOutput, SessionOutput, ViewOutput, WatchOutput,
+    compact_text, format_response, print_help, print_json,
 };
 use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
-use crate::papers::{
-    FetchResult, extract_dois, fetch_dois, fetch_one, read_import_text, update_status_from_remote,
-};
+use crate::papers::{extract_dois, read_import_text, update_status_from_remote};
 use crate::queue::{
     AddResult, Queue, QueueEntry, QueueStatus, RemoveResult, StatusResult, default_queue_path,
     normalize_doi,
 };
 use crate::scinet::{
-    RequestRemoteState, RequestView, SCINET_URL, ScinetAvailability, ScinetResponse,
-    probe_current_session, probe_session, request_doi, search_doi, view_request,
+    RequestView, SCINET_URL, ScinetResponse, probe_current_session, probe_session, search_doi,
+    view_request,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -280,64 +280,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("request") => {
             let request = parse_request(args)?;
-            let dois = request_dois(&queue, &request)?;
-
-            if dois.is_empty() {
-                if request.json {
-                    print_json(&Vec::<RequestOutput>::new())?;
-                    return Ok(());
-                }
-
-                println!("no queued entries");
-                return Ok(());
-            }
-
-            let results = with_scinet_page(!request.json, |page| {
-                let mut results = Vec::new();
-
-                for doi in &dois {
-                    let response = request_doi(page, SCINET_URL, doi, request.reward)
-                        .map_err(|error| error.to_string())?;
-
-                    if response.looks_logged_out() {
-                        return Err("not logged into Sci-Net; run `snq login` first".to_string());
-                    }
-
-                    let (status, remote_state) =
-                        record_request_or_existing(page, &queue, doi, &response)?;
-                    results.push(RequestOutput {
-                        doi: doi.clone(),
-                        status,
-                        remote_state,
-                        response,
-                    });
-                }
-
-                Ok(results)
-            })?;
-
-            if request.json {
-                print_json(&results)?;
-                return Ok(());
-            }
-
-            for result in results {
-                if request.all {
-                    match result.remote_state {
-                        Some(remote_state) => {
-                            println!("already-{}\t{}", remote_state.as_str(), result.doi)
-                        }
-                        None => println!("requested\t{}", result.doi),
-                    }
-                } else {
-                    match result.remote_state {
-                        Some(remote_state) => {
-                            println!("already-{}\t{}", remote_state.as_str(), result.doi)
-                        }
-                        None => println!("{}", format_response(&result.response)?),
-                    }
-                }
-            }
+            request::handle_request(&queue, request)?;
         }
         Some("watch") => {
             let json = parse_json_flag("watch", args)?;
@@ -411,47 +354,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("fetch") => {
             let fetch = parse_fetch(args)?;
-            let dois = fetch_dois(&queue, fetch.doi.as_deref())?;
-
-            if dois.is_empty() {
-                if fetch.json {
-                    print_json(&Vec::<FetchOutput>::new())?;
-                    return Ok(());
-                }
-
-                println!("queue empty");
-                return Ok(());
-            }
-
-            let outputs = with_scinet_page(!fetch.json, |page| {
-                fetch_until_complete(
-                    &dois,
-                    fetch.wait,
-                    |doi| fetch_one(&queue, page, doi, &fetch.out_dir),
-                    |remaining| {
-                        if fetch.json {
-                            eprintln!(
-                                "waiting for {remaining} PDF(s); next poll in {}s",
-                                fetch.poll_secs
-                            );
-                        } else {
-                            println!(
-                                "waiting for {remaining} PDF(s); next poll in {}s",
-                                fetch.poll_secs
-                            );
-                        }
-                        thread::sleep(Duration::from_secs(fetch.poll_secs));
-                    },
-                )
-            })?;
-
-            if fetch.json {
-                print_json(&outputs)?;
-            } else {
-                for output in &outputs {
-                    println!("{}", fetch_text_line(output));
-                }
-            }
+            fetch::handle_fetch(&queue, fetch)?;
         }
         Some("approve") => {
             let approve = parse_approve(args)?;
@@ -713,178 +616,11 @@ fn wait_for_login(engine: crate::browser::BrowserEngine, port: u16) -> Result<()
     }
 }
 
-fn request_dois(queue: &Queue, request: &RequestArgs) -> Result<Vec<String>, String> {
-    if let Some(doi) = &request.doi {
-        return Ok(vec![doi.clone()]);
-    }
-
-    let entries = queue.list().map_err(|error| error.to_string())?;
-
-    Ok(entries
-        .into_iter()
-        .filter(|entry| entry.status == QueueStatus::Queued)
-        .map(|entry| entry.doi)
-        .collect())
-}
-
 fn watch_entries(entries: Vec<QueueEntry>) -> Vec<QueueEntry> {
     entries
         .into_iter()
         .filter(|entry| matches!(entry.status, QueueStatus::Requested | QueueStatus::Working))
         .collect()
-}
-
-fn fetch_until_complete<F, W>(
-    dois: &[String],
-    wait: bool,
-    mut fetch: F,
-    mut wait_for_next_poll: W,
-) -> Result<Vec<FetchOutput>, String>
-where
-    F: FnMut(&str) -> Result<FetchResult, String>,
-    W: FnMut(usize),
-{
-    let mut pending = dois.to_vec();
-    let mut outputs = Vec::new();
-
-    loop {
-        let mut next_pending = Vec::new();
-
-        for doi in pending {
-            match fetch(&doi)? {
-                FetchResult::Fetched(path) => outputs.push(FetchOutput {
-                    doi,
-                    status: FetchOutputStatus::Fetched,
-                    remote_state: RequestRemoteState::Pdf,
-                    availability: Vec::new(),
-                    path: Some(path.display().to_string()),
-                }),
-                FetchResult::NoPdf {
-                    remote_state,
-                    availability,
-                } => {
-                    if wait && availability.is_empty() {
-                        next_pending.push(doi);
-                    } else {
-                        outputs.push(FetchOutput {
-                            doi,
-                            status: FetchOutputStatus::NoPdf,
-                            remote_state,
-                            availability,
-                            path: None,
-                        });
-                    }
-                }
-            }
-        }
-
-        if !wait || next_pending.is_empty() {
-            return Ok(outputs);
-        }
-
-        wait_for_next_poll(next_pending.len());
-        pending = next_pending;
-    }
-}
-
-fn fetch_text_line(output: &FetchOutput) -> String {
-    match output.path.as_deref() {
-        Some(path) => path.to_string(),
-        None if output.availability.is_empty() => {
-            format!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi)
-        }
-        None => format!(
-            "no-pdf\t{}\t{}\tavailability={}",
-            output.remote_state.as_str(),
-            output.doi,
-            format_availability(&output.availability)
-        ),
-    }
-}
-
-fn format_availability(availability: &[ScinetAvailability]) -> String {
-    availability
-        .iter()
-        .map(|availability| availability.as_str())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn mark_requested(queue: &Queue, doi: &str) -> Result<(), String> {
-    match queue
-        .set_status(doi, QueueStatus::Requested)
-        .map_err(|error| error.to_string())?
-    {
-        StatusResult::Updated(_) => {}
-        StatusResult::NotFound(_) => {
-            let _ = queue.add(doi).map_err(|error| error.to_string())?;
-            let _ = queue
-                .set_status(doi, QueueStatus::Requested)
-                .map_err(|error| error.to_string())?;
-        }
-    }
-
-    Ok(())
-}
-
-fn ensure_request_ok(doi: &str, response: &ScinetResponse) -> Result<(), String> {
-    if response.ok {
-        if let Some(error) = response.logical_error() {
-            Err(format!(
-                "request: Sci-Net returned logical error for {doi}: {error}"
-            ))
-        } else {
-            Ok(())
-        }
-    } else {
-        Err(format!(
-            "request: Sci-Net returned status {} for {doi}",
-            response.status
-        ))
-    }
-}
-
-fn record_request_or_existing(
-    page: &mut impl PageSession,
-    queue: &Queue,
-    doi: &str,
-    response: &ScinetResponse,
-) -> Result<(QueueStatus, Option<RequestRemoteState>), String> {
-    match ensure_request_ok(doi, response) {
-        Ok(()) => {
-            mark_requested(queue, doi)?;
-            Ok((QueueStatus::Requested, None))
-        }
-        Err(error) => {
-            let view = view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
-            let remote_state = view.remote_state();
-
-            if remote_state == RequestRemoteState::LoggedOut {
-                return Err("not logged into Sci-Net; run `snq login` first".to_string());
-            }
-
-            if !view.matches_doi(doi) {
-                return Err(error);
-            }
-
-            let status = match remote_state {
-                RequestRemoteState::Working => {
-                    mark_requested(queue, doi)?;
-                    queue
-                        .set_status(doi, QueueStatus::Working)
-                        .map_err(|error| error.to_string())?;
-                    QueueStatus::Working
-                }
-                RequestRemoteState::Pending | RequestRemoteState::Pdf => {
-                    mark_requested(queue, doi)?;
-                    QueueStatus::Requested
-                }
-                RequestRemoteState::LoggedOut => unreachable!(),
-            };
-
-            Ok((status, Some(remote_state)))
-        }
-    }
 }
 
 fn mark_approved(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -928,6 +664,7 @@ fn ensure_can_approve(queue: &Queue, doi: &str, force: bool) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scinet::RequestRemoteState;
     use std::fs;
 
     #[test]
@@ -952,33 +689,6 @@ mod tests {
 
         assert_eq!(status, QueueStatus::Working);
         assert_eq!(entries[0].status, QueueStatus::Working);
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn request_all_targets_only_queued_entries() {
-        let dir = std::env::temp_dir().join(format!("snq-request-test-{}", std::process::id()));
-        let path = dir.join("queue.jsonl");
-        let queue = Queue::new(path);
-
-        queue.add("10.1000/snq-example").unwrap();
-        queue.add("10.1000/snq-alt").unwrap();
-        queue
-            .set_status("10.1000/snq-alt", QueueStatus::Requested)
-            .unwrap();
-
-        let request = RequestArgs {
-            doi: None,
-            reward: 1,
-            all: true,
-            json: false,
-        };
-
-        assert_eq!(
-            request_dois(&queue, &request).unwrap(),
-            vec!["10.1000/snq-example".to_string()]
-        );
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -1047,258 +757,6 @@ mod tests {
     }
 
     #[test]
-    fn fetch_wait_keeps_polling_until_all_targets_are_fetched() {
-        let dois = vec!["10.1000/one".to_string(), "10.1000/two".to_string()];
-        let mut calls = Vec::new();
-        let mut waits = Vec::new();
-
-        let outputs = fetch_until_complete(
-            &dois,
-            true,
-            |doi| {
-                calls.push(doi.to_string());
-
-                match (calls.len(), doi) {
-                    (1, "10.1000/one") => Ok(FetchResult::Fetched("papers/one.pdf".into())),
-                    (2, "10.1000/two") => Ok(FetchResult::NoPdf {
-                        remote_state: RequestRemoteState::Working,
-                        availability: Vec::new(),
-                    }),
-                    (3, "10.1000/two") => Ok(FetchResult::Fetched("papers/two.pdf".into())),
-                    _ => panic!("unexpected fetch call sequence: {calls:?}"),
-                }
-            },
-            |remaining| waits.push(remaining),
-        )
-        .unwrap();
-
-        assert_eq!(
-            calls,
-            vec![
-                "10.1000/one".to_string(),
-                "10.1000/two".to_string(),
-                "10.1000/two".to_string()
-            ]
-        );
-        assert_eq!(waits, vec![1]);
-        assert_eq!(outputs.len(), 2);
-        assert_eq!(outputs[0].doi, "10.1000/one");
-        assert_eq!(outputs[0].path.as_deref(), Some("papers/one.pdf"));
-        assert_eq!(outputs[1].doi, "10.1000/two");
-        assert_eq!(outputs[1].path.as_deref(), Some("papers/two.pdf"));
-    }
-
-    #[test]
-    fn fetch_wait_stops_polling_targets_with_scinet_availability() {
-        let dois = vec!["10.1000/open".to_string(), "10.1000/pending".to_string()];
-        let mut calls = Vec::new();
-        let mut waits = Vec::new();
-
-        let outputs = fetch_until_complete(
-            &dois,
-            true,
-            |doi| {
-                calls.push(doi.to_string());
-
-                match (calls.len(), doi) {
-                    (1, "10.1000/open") => Ok(FetchResult::NoPdf {
-                        remote_state: RequestRemoteState::Pending,
-                        availability: vec![ScinetAvailability::OpenAccess],
-                    }),
-                    (2, "10.1000/pending") => Ok(FetchResult::NoPdf {
-                        remote_state: RequestRemoteState::Pending,
-                        availability: Vec::new(),
-                    }),
-                    (3, "10.1000/pending") => Ok(FetchResult::Fetched("papers/pending.pdf".into())),
-                    _ => panic!("unexpected fetch call sequence: {calls:?}"),
-                }
-            },
-            |remaining| waits.push(remaining),
-        )
-        .unwrap();
-
-        assert_eq!(
-            calls,
-            vec![
-                "10.1000/open".to_string(),
-                "10.1000/pending".to_string(),
-                "10.1000/pending".to_string()
-            ]
-        );
-        assert_eq!(waits, vec![1]);
-        assert_eq!(outputs.len(), 2);
-        assert_eq!(outputs[0].doi, "10.1000/open");
-        assert_eq!(
-            outputs[0].availability,
-            vec![ScinetAvailability::OpenAccess]
-        );
-        assert!(outputs[0].path.is_none());
-        assert_eq!(outputs[1].doi, "10.1000/pending");
-        assert_eq!(outputs[1].path.as_deref(), Some("papers/pending.pdf"));
-    }
-
-    #[test]
-    fn fetch_without_wait_reports_no_pdf_outputs() {
-        let dois = vec!["10.1000/one".to_string()];
-        let outputs = fetch_until_complete(
-            &dois,
-            false,
-            |_| {
-                Ok(FetchResult::NoPdf {
-                    remote_state: RequestRemoteState::Pending,
-                    availability: vec![ScinetAvailability::SciHub],
-                })
-            },
-            |_| panic!("non-waiting fetch should not sleep"),
-        )
-        .unwrap();
-
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].doi, "10.1000/one");
-        assert!(matches!(outputs[0].status, FetchOutputStatus::NoPdf));
-        assert_eq!(outputs[0].remote_state, RequestRemoteState::Pending);
-        assert_eq!(outputs[0].availability, vec![ScinetAvailability::SciHub]);
-        assert!(outputs[0].path.is_none());
-    }
-
-    #[test]
-    fn fetch_text_output_keeps_mixed_batch_statuses() {
-        let outputs = [
-            FetchOutput {
-                doi: "10.1000/one".to_string(),
-                status: FetchOutputStatus::Fetched,
-                remote_state: RequestRemoteState::Pdf,
-                availability: Vec::new(),
-                path: Some("papers/one.pdf".to_string()),
-            },
-            FetchOutput {
-                doi: "10.1000/two".to_string(),
-                status: FetchOutputStatus::NoPdf,
-                remote_state: RequestRemoteState::Working,
-                availability: vec![ScinetAvailability::OpenAccess, ScinetAvailability::SciHub],
-                path: None,
-            },
-        ];
-        let lines = outputs.iter().map(fetch_text_line).collect::<Vec<_>>();
-
-        assert_eq!(
-            lines,
-            vec![
-                "papers/one.pdf".to_string(),
-                "no-pdf\tworking\t10.1000/two\tavailability=open-access,sci-hub".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn successful_request_is_marked_before_later_failure() {
-        let dir = std::env::temp_dir().join(format!(
-            "snq-request-partial-failure-test-{}",
-            std::process::id()
-        ));
-        let path = dir.join("queue.jsonl");
-        let queue = Queue::new(path);
-
-        queue.add("10.1000/snq-example").unwrap();
-        queue.add("10.1000/snq-alt").unwrap();
-
-        let ok = ScinetResponse {
-            ok: true,
-            status: 200,
-            body: serde_json::json!({ "success": true }),
-        };
-        let logical_error = ScinetResponse {
-            ok: true,
-            status: 200,
-            body: serde_json::json!({ "success": false, "message": "invalid request" }),
-        };
-
-        let mut ok_page = FakePageSession::new(Vec::new());
-        let mut error_page = FakePageSession::new(vec![serde_json::json!({
-            "title": "Sci-Net",
-            "url": "https://sci-net.xyz/",
-            "text": "tokens request library",
-            "pdf_urls": []
-        })]);
-
-        record_request_or_existing(&mut ok_page, &queue, "10.1000/snq-example", &ok).unwrap();
-        assert!(
-            record_request_or_existing(&mut error_page, &queue, "10.1000/snq-alt", &logical_error)
-                .is_err()
-        );
-
-        let entries = queue.list().unwrap();
-        assert_eq!(entries[0].status, QueueStatus::Requested);
-        assert_eq!(entries[1].status, QueueStatus::Queued);
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn failed_request_syncs_existing_pending_page() {
-        let dir = std::env::temp_dir().join(format!(
-            "snq-request-existing-pending-test-{}",
-            std::process::id()
-        ));
-        let path = dir.join("queue.jsonl");
-        let queue = Queue::new(path);
-        let doi = "10.1000/snq-existing";
-
-        queue.add(doi).unwrap();
-        let response = ScinetResponse {
-            ok: true,
-            status: 200,
-            body: serde_json::json!({ "error": true }),
-        };
-        let mut page = FakePageSession::new(vec![serde_json::json!({
-            "title": "Sci-Net",
-            "url": "https://sci-net.xyz/10.1000/snq-existing",
-            "text": "doi 10.1000/snq-existing\nReward: 1 token",
-            "pdf_urls": []
-        })]);
-
-        let (status, remote_state) =
-            record_request_or_existing(&mut page, &queue, doi, &response).unwrap();
-
-        assert_eq!(status, QueueStatus::Requested);
-        assert_eq!(remote_state, Some(RequestRemoteState::Pending));
-        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Requested);
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn failed_request_does_not_sync_unrelated_page() {
-        let dir = std::env::temp_dir().join(format!(
-            "snq-request-unrelated-page-test-{}",
-            std::process::id()
-        ));
-        let path = dir.join("queue.jsonl");
-        let queue = Queue::new(path);
-        let doi = "10.1000/snq-missing";
-
-        queue.add(doi).unwrap();
-        let response = ScinetResponse {
-            ok: true,
-            status: 200,
-            body: serde_json::json!({ "error": true }),
-        };
-        let mut page = FakePageSession::new(vec![serde_json::json!({
-            "title": "Sci-Net",
-            "url": "https://sci-net.xyz/",
-            "text": "tokens request library",
-            "pdf_urls": []
-        })]);
-
-        let error = record_request_or_existing(&mut page, &queue, doi, &response).unwrap_err();
-
-        assert!(error.contains("error`=true"));
-        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Queued);
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
     fn approve_requires_fetched_status_unless_forced() {
         let dir = std::env::temp_dir().join(format!("snq-approve-test-{}", std::process::id()));
         let path = dir.join("queue.jsonl");
@@ -1355,58 +813,5 @@ mod tests {
         assert_eq!(entries[0].status, QueueStatus::Approved);
 
         let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn request_non_ok_response_is_rejected() {
-        let response = ScinetResponse {
-            ok: false,
-            status: 500,
-            body: serde_json::json!({ "error": "boom" }),
-        };
-
-        assert!(ensure_request_ok("10.1000/snq-alt", &response).is_err());
-    }
-
-    #[test]
-    fn request_logical_error_response_is_rejected() {
-        let response = ScinetResponse {
-            ok: true,
-            status: 200,
-            body: serde_json::json!({ "success": false, "message": "invalid request" }),
-        };
-
-        let error = ensure_request_ok("10.1000/snq-alt", &response).unwrap_err();
-        assert!(error.contains("invalid request"));
-    }
-
-    struct FakePageSession {
-        values: Vec<serde_json::Value>,
-    }
-
-    impl FakePageSession {
-        fn new(values: Vec<serde_json::Value>) -> Self {
-            Self { values }
-        }
-    }
-
-    impl PageSession for FakePageSession {
-        fn navigate(&mut self, _url: &str) -> Result<(), PageError> {
-            Ok(())
-        }
-
-        fn evaluate_json(&mut self, _expression: &str) -> Result<serde_json::Value, PageError> {
-            if self.values.is_empty() {
-                return Err(PageError::UnexpectedResponse(serde_json::json!({
-                    "error": "missing fake response"
-                })));
-            }
-
-            Ok(self.values.remove(0))
-        }
-
-        fn close_browser(&mut self) -> Result<(), PageError> {
-            Ok(())
-        }
     }
 }
