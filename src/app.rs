@@ -292,8 +292,8 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
 
-            let responses = with_scinet_page(!request.json, |page| {
-                let mut responses = Vec::new();
+            let results = with_scinet_page(!request.json, |page| {
+                let mut results = Vec::new();
 
                 for doi in &dois {
                     let response = request_doi(page, SCINET_URL, doi, request.reward)
@@ -303,31 +303,39 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                         return Err("not logged into Sci-Net; run `snq login` first".to_string());
                     }
 
-                    record_successful_request(&queue, doi, &response)?;
-                    responses.push(response);
+                    let (status, remote_state) =
+                        record_request_or_existing(page, &queue, doi, &response)?;
+                    results.push(RequestOutput {
+                        doi: doi.clone(),
+                        status,
+                        remote_state,
+                        response,
+                    });
                 }
 
-                Ok(responses)
+                Ok(results)
             })?;
 
             if request.json {
-                let output = dois
-                    .iter()
-                    .zip(responses.iter())
-                    .map(|(doi, response)| RequestOutput {
-                        doi: doi.clone(),
-                        response: response.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                print_json(&output)?;
+                print_json(&results)?;
                 return Ok(());
             }
 
-            for (doi, response) in dois.iter().zip(responses.iter()) {
+            for result in results {
                 if request.all {
-                    println!("requested\t{doi}");
+                    match result.remote_state {
+                        Some(remote_state) => {
+                            println!("already-{}\t{}", remote_state.as_str(), result.doi)
+                        }
+                        None => println!("requested\t{}", result.doi),
+                    }
                 } else {
-                    println!("{}", format_response(response)?);
+                    match result.remote_state {
+                        Some(remote_state) => {
+                            println!("already-{}\t{}", remote_state.as_str(), result.doi)
+                        }
+                        None => println!("{}", format_response(&result.response)?),
+                    }
                 }
             }
         }
@@ -836,13 +844,47 @@ fn ensure_request_ok(doi: &str, response: &ScinetResponse) -> Result<(), String>
     }
 }
 
-fn record_successful_request(
+fn record_request_or_existing(
+    page: &mut impl PageSession,
     queue: &Queue,
     doi: &str,
     response: &ScinetResponse,
-) -> Result<(), String> {
-    ensure_request_ok(doi, response)?;
-    mark_requested(queue, doi)
+) -> Result<(QueueStatus, Option<RequestRemoteState>), String> {
+    match ensure_request_ok(doi, response) {
+        Ok(()) => {
+            mark_requested(queue, doi)?;
+            Ok((QueueStatus::Requested, None))
+        }
+        Err(error) => {
+            let view = view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
+            let remote_state = view.remote_state();
+
+            if remote_state == RequestRemoteState::LoggedOut {
+                return Err("not logged into Sci-Net; run `snq login` first".to_string());
+            }
+
+            if !view.matches_doi(doi) {
+                return Err(error);
+            }
+
+            let status = match remote_state {
+                RequestRemoteState::Working => {
+                    mark_requested(queue, doi)?;
+                    queue
+                        .set_status(doi, QueueStatus::Working)
+                        .map_err(|error| error.to_string())?;
+                    QueueStatus::Working
+                }
+                RequestRemoteState::Pending | RequestRemoteState::Pdf => {
+                    mark_requested(queue, doi)?;
+                    QueueStatus::Requested
+                }
+                RequestRemoteState::LoggedOut => unreachable!(),
+            };
+
+            Ok((status, Some(remote_state)))
+        }
+    }
 }
 
 fn mark_approved(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -1171,12 +1213,87 @@ mod tests {
             body: serde_json::json!({ "success": false, "message": "invalid request" }),
         };
 
-        record_successful_request(&queue, "10.1000/snq-example", &ok).unwrap();
-        assert!(record_successful_request(&queue, "10.1000/snq-alt", &logical_error).is_err());
+        let mut ok_page = FakePageSession::new(Vec::new());
+        let mut error_page = FakePageSession::new(vec![serde_json::json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/",
+            "text": "tokens request library",
+            "pdf_urls": []
+        })]);
+
+        record_request_or_existing(&mut ok_page, &queue, "10.1000/snq-example", &ok).unwrap();
+        assert!(
+            record_request_or_existing(&mut error_page, &queue, "10.1000/snq-alt", &logical_error)
+                .is_err()
+        );
 
         let entries = queue.list().unwrap();
         assert_eq!(entries[0].status, QueueStatus::Requested);
         assert_eq!(entries[1].status, QueueStatus::Queued);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_request_syncs_existing_pending_page() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-request-existing-pending-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let doi = "10.1000/snq-existing";
+
+        queue.add(doi).unwrap();
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "error": true }),
+        };
+        let mut page = FakePageSession::new(vec![serde_json::json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/10.1000/snq-existing",
+            "text": "doi 10.1000/snq-existing\nReward: 1 token",
+            "pdf_urls": []
+        })]);
+
+        let (status, remote_state) =
+            record_request_or_existing(&mut page, &queue, doi, &response).unwrap();
+
+        assert_eq!(status, QueueStatus::Requested);
+        assert_eq!(remote_state, Some(RequestRemoteState::Pending));
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Requested);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_request_does_not_sync_unrelated_page() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-request-unrelated-page-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let doi = "10.1000/snq-missing";
+
+        queue.add(doi).unwrap();
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "error": true }),
+        };
+        let mut page = FakePageSession::new(vec![serde_json::json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/",
+            "text": "tokens request library",
+            "pdf_urls": []
+        })]);
+
+        let error = record_request_or_existing(&mut page, &queue, doi, &response).unwrap_err();
+
+        assert!(error.contains("error`=true"));
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Queued);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -1261,5 +1378,35 @@ mod tests {
 
         let error = ensure_request_ok("10.1000/snq-alt", &response).unwrap_err();
         assert!(error.contains("invalid request"));
+    }
+
+    struct FakePageSession {
+        values: Vec<serde_json::Value>,
+    }
+
+    impl FakePageSession {
+        fn new(values: Vec<serde_json::Value>) -> Self {
+            Self { values }
+        }
+    }
+
+    impl PageSession for FakePageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(&mut self, _expression: &str) -> Result<serde_json::Value, PageError> {
+            if self.values.is_empty() {
+                return Err(PageError::UnexpectedResponse(serde_json::json!({
+                    "error": "missing fake response"
+                })));
+            }
+
+            Ok(self.values.remove(0))
+        }
+
+        fn close_browser(&mut self) -> Result<(), PageError> {
+            Ok(())
+        }
     }
 }

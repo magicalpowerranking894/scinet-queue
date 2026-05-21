@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Synced local queue state when Sci-Net rejects a request for a DOI whose
+  request page already exists remotely.
 - Closed waited `snq login` browser sessions gracefully after login detection so
   fresh authentication state can be reused by later headless commands.
 - Surfaced Sci-Net request error reasons when response bodies include them.

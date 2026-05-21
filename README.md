@@ -114,6 +114,8 @@ snq request --all --reward 1
 ```
 
 If `--reward` is omitted, `snq` uses `1`.
+If Sci-Net reports that a request cannot be created but the DOI already has a
+visible request page, `snq` syncs the local queue to that remote state.
 
 Watch requested and working entries for visible PDF uploads:
 

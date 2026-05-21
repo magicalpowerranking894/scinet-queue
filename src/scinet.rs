@@ -85,6 +85,12 @@ impl RequestView {
 
         RequestRemoteState::Pending
     }
+
+    pub(crate) fn matches_doi(&self, doi: &str) -> bool {
+        self.text
+            .to_ascii_lowercase()
+            .contains(&doi.to_ascii_lowercase())
+    }
 }
 
 impl SessionProbe {

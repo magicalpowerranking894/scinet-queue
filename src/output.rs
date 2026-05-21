@@ -88,6 +88,8 @@ pub(crate) struct BrowserChoiceOutput {
 #[derive(Debug, Serialize)]
 pub(crate) struct RequestOutput {
     pub(crate) doi: String,
+    pub(crate) status: QueueStatus,
+    pub(crate) remote_state: Option<RequestRemoteState>,
     pub(crate) response: ScinetResponse,
 }
 

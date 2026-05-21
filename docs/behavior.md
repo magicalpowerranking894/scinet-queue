@@ -19,6 +19,10 @@ Observed outcomes:
 `snq request <doi> --reward <n>` creates a request from the managed session.
 The local queue is marked `requested` after a successful request call.
 
+If Sci-Net rejects a request but the DOI's request page already exists and is
+visible in the managed session, `snq` treats that as an existing remote request
+and syncs the local queue instead of leaving it queued.
+
 Observed request page states:
 
 - `pending`: no visible solver and no PDF link.
