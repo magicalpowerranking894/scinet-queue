@@ -517,6 +517,31 @@ fn doctor_json_reports_failures_with_nonzero_exit() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn doctor_json_redacts_home_paths() {
+    let home = temp_workspace("doctor-redact-home");
+    let dir = temp_workspace("doctor-redact-workspace");
+    let browser = home.join("missing-browser");
+
+    let doctor = snq()
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .env("SCINET_QUEUE_BROWSER", &browser)
+        .args(["doctor", "--json", "--redact"])
+        .output()
+        .unwrap();
+
+    assert!(!doctor.status.success());
+
+    let value: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let message = value["browser"]["message"].as_str().unwrap();
+    assert!(message.contains("~/missing-browser"));
+    assert!(!message.contains(home.to_str().unwrap()));
+
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn unix_time() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -50,6 +50,7 @@ Usage:
 
 Options:
       --json        Print machine-readable JSON where supported
+      --redact      Hide local paths and token balances in diagnostics
   -h, --help       Print help
   -V, --version    Print version
 

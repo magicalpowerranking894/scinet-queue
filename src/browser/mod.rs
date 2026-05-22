@@ -9,7 +9,7 @@ use std::fs;
 #[cfg(not(windows))]
 use std::fs::File;
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -26,8 +26,9 @@ pub(crate) use discovery::{
     clear_browser_preference, detect_browser, save_browser_preference,
 };
 
-const PROFILE_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+const PROFILE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const PROFILE_LOCK_POLL: Duration = Duration::from_millis(50);
+const BIDI_LAUNCH_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Browser {
@@ -116,6 +117,7 @@ impl Browser {
         }
 
         fs::create_dir_all(profile_dir)?;
+        ensure_native_profile_unlocked(profile_dir)?;
         let lock = ProfileLock::acquire(profile_dir)?;
         let active_port_path = profile_dir.join("DevToolsActivePort");
         let _ = fs::remove_file(&active_port_path);
@@ -169,37 +171,47 @@ impl Browser {
         }
 
         fs::create_dir_all(profile_dir)?;
+        ensure_native_profile_unlocked(profile_dir)?;
         let lock = ProfileLock::acquire(profile_dir)?;
-        let port = reserve_loopback_port()?;
 
-        let mut command = Command::new(&self.path);
-        command
-            .arg("--profile")
-            .arg(profile_dir)
-            .arg("--no-remote")
-            .arg("--remote-debugging-port")
-            .arg(port.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        let mut last_error = None;
 
-        if headless {
-            command.arg("--headless");
+        for _ in 0..BIDI_LAUNCH_ATTEMPTS {
+            let port = reserve_loopback_port()?;
+            let mut command = Command::new(&self.path);
+            command
+                .arg("--profile")
+                .arg(profile_dir)
+                .arg("--no-remote")
+                .arg("--remote-debugging-port")
+                .arg(port.to_string())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+
+            if headless {
+                command.arg("--headless");
+            }
+
+            let mut child = command.spawn()?;
+
+            match wait_for_bidi_port(port, &mut child, Duration::from_secs(10)) {
+                Ok(()) => {
+                    return Ok(BidiBrowser {
+                        child,
+                        port,
+                        _lock: lock,
+                    });
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    last_error = Some(error);
+                }
+            }
         }
 
-        let mut child = command.spawn()?;
-
-        if let Err(error) = wait_for_tcp_port(port, &mut child, Duration::from_secs(10)) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-
-        Ok(BidiBrowser {
-            child,
-            port,
-            _lock: lock,
-        })
+        Err(last_error.unwrap_or(BrowserError::BidiPortTimeout(0)))
     }
 }
 
@@ -322,6 +334,10 @@ pub(crate) enum BrowserError {
     PreferenceBrowserNotFound(PathBuf),
     PreferenceBrowserNotUsable(PathBuf),
     ProfileLocked(PathBuf),
+    NativeProfileLocked {
+        profile_dir: PathBuf,
+        lock_path: PathBuf,
+    },
     UnsupportedCdpEngine(BrowserEngine),
     UnsupportedBidiEngine(BrowserEngine),
     BrowserExited,
@@ -378,20 +394,35 @@ impl fmt::Display for BrowserError {
                 path.display()
             ),
             BrowserError::ProfileLocked(path) => {
+                let owner = lock_owner_hint(path)
+                    .map(|owner| format!("; lock owner: {owner}"))
+                    .unwrap_or_default();
+
                 if cfg!(windows) {
                     write!(
                         f,
-                        "managed browser profile lock exists: {}; close any snq command or managed browser using this profile, then remove the lock file if it is stale",
-                        path.display()
+                        "managed browser profile lock exists: {}{}; close any snq command or managed browser using this profile, then remove the lock file if it is stale",
+                        path.display(),
+                        owner
                     )
                 } else {
                     write!(
                         f,
-                        "managed browser profile is already in use: {}; close any browser opened by `snq login --no-wait` or wait for the other snq command to finish",
-                        path.display()
+                        "managed browser profile is already in use: {}{}; close any browser opened by `snq login --no-wait` or wait for the other snq command to finish",
+                        path.display(),
+                        owner
                     )
                 }
             }
+            BrowserError::NativeProfileLocked {
+                profile_dir,
+                lock_path,
+            } => write!(
+                f,
+                "managed browser profile appears to be open: {}; close the browser opened by `snq login --no-wait` before running authenticated commands, or remove stale browser lock file {} if no managed browser is running",
+                profile_dir.display(),
+                lock_path.display()
+            ),
             BrowserError::UnsupportedCdpEngine(engine) => {
                 write!(
                     f,
@@ -450,6 +481,28 @@ fn is_zen_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn ensure_native_profile_unlocked(profile_dir: &Path) -> Result<(), BrowserError> {
+    for lock_name in ["SingletonLock", "SingletonSocket", "parent.lock"] {
+        let lock_path = profile_dir.join(lock_name);
+
+        if lock_path.exists() || fs::symlink_metadata(&lock_path).is_ok() {
+            return Err(BrowserError::NativeProfileLocked {
+                profile_dir: profile_dir.to_path_buf(),
+                lock_path,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn lock_owner_hint(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.lines().next().map(str::trim).map(str::to_string))
+        .filter(|line| !line.is_empty())
+}
+
 fn wait_for_devtools_port(
     path: &Path,
     child: &mut Child,
@@ -487,15 +540,17 @@ fn reserve_loopback_port() -> Result<u16, BrowserError> {
     Ok(listener.local_addr()?.port())
 }
 
-fn wait_for_tcp_port(port: u16, child: &mut Child, timeout: Duration) -> Result<(), BrowserError> {
+fn wait_for_bidi_port(port: u16, child: &mut Child, timeout: Duration) -> Result<(), BrowserError> {
     let start = Instant::now();
+    let url = format!("ws://127.0.0.1:{port}/session");
 
     while start.elapsed() < timeout {
         if child.try_wait()?.is_some() {
             return Err(BrowserError::BrowserExited);
         }
 
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        if let Ok((mut socket, _)) = tungstenite::connect(&url) {
+            let _ = socket.close(None);
             return Ok(());
         }
 
@@ -766,6 +821,44 @@ mod tests {
         assert!(message.contains("managed browser profile is already in use"));
         assert!(message.contains("close any browser opened by `snq login --no-wait`"));
         assert!(message.contains("wait for the other snq command to finish"));
+    }
+
+    #[test]
+    fn profile_lock_error_includes_owner_when_available() {
+        let dir = env::temp_dir().join(format!(
+            "snq-profile-lock-owner-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".snq-profile.lock");
+        fs::write(&path, "pid=123 host=test\n").unwrap();
+
+        let message = BrowserError::ProfileLocked(path).to_string();
+
+        assert!(message.contains("lock owner: pid=123 host=test"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn native_profile_lock_reports_open_no_wait_browser() {
+        let dir = env::temp_dir().join(format!(
+            "snq-native-profile-lock-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("parent.lock"), "").unwrap();
+
+        let error = ensure_native_profile_unlocked(&dir).unwrap_err();
+        let message = error.to_string();
+
+        assert!(matches!(error, BrowserError::NativeProfileLocked { .. }));
+        assert!(message.contains("managed browser profile appears to be open"));
+        assert!(message.contains("snq login --no-wait"));
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

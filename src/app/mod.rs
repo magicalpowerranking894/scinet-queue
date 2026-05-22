@@ -7,8 +7,8 @@ mod fetch;
 mod request;
 
 use crate::args::{
-    BrowsersAction, parse_approve, parse_browsers, parse_fetch, parse_json_flag, parse_login,
-    parse_request, parse_url, parse_view,
+    BrowsersAction, parse_approve, parse_browsers, parse_diagnostic_flags, parse_fetch,
+    parse_json_flag, parse_login, parse_request, parse_url, parse_view,
 };
 use crate::browser::{
     BROWSER_ENV, Browser, BrowserChoice, BrowserError, available_browser_candidates,
@@ -164,8 +164,8 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             }
         }
         Some("session") => {
-            let json = parse_json_flag("session", args)?;
-            let browser = detect_browser_or_prompt(!json)?;
+            let diagnostic = parse_diagnostic_flags("session", args)?;
+            let browser = detect_browser_or_prompt(!diagnostic.json)?;
             let profile_dir = profile_dir(&browser).map_err(|error| error.to_string())?;
             let session_browser = browser
                 .launch_session(&profile_dir, true)
@@ -185,8 +185,13 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 logged_in,
                 token_balance: if logged_in { probe.token_balance } else { None },
             };
+            let output = if diagnostic.redact {
+                redact_session_output(output)
+            } else {
+                output
+            };
 
-            if json {
+            if diagnostic.json {
                 print_json(&output)?;
                 return Ok(());
             }
@@ -381,10 +386,14 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             println!("approved\t{doi}");
         }
         Some("doctor") => {
-            let json = parse_json_flag("doctor", args)?;
-            let report = doctor_report(&queue);
+            let diagnostic = parse_diagnostic_flags("doctor", args)?;
+            let mut report = doctor_report(&queue);
 
-            if json {
+            if diagnostic.redact {
+                report = report.redact();
+            }
+
+            if diagnostic.json {
                 print_json(&report)?;
             } else {
                 print_doctor_report(&report);
@@ -402,6 +411,35 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn redact_session_output(mut output: SessionOutput) -> SessionOutput {
+    output.browser = redact_path_text(&output.browser);
+    output.profile = redact_path_text(&output.profile);
+    output.queue = redact_path_text(&output.queue);
+    output.url = redact_url(&output.url);
+    output.token_balance = None;
+    output
+}
+
+fn redact_path_text(value: &str) -> String {
+    let Some(home) = env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+    else {
+        return value.to_string();
+    };
+
+    let home = home.display().to_string();
+
+    value
+        .strip_prefix(&home)
+        .map(|suffix| format!("~{suffix}"))
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn redact_url(value: &str) -> String {
+    value.split(['?', '#']).next().unwrap_or(value).to_string()
 }
 
 fn with_scinet_session<F>(interactive: bool, operation: F) -> Result<ScinetResponse, String>
@@ -510,7 +548,7 @@ fn login_no_wait_messages(
     [
         format!("opened {engine} login window (launcher pid {launcher_pid})"),
         format!("profile {}", profile_dir.display()),
-        "log in, then close this browser window before running authenticated commands".to_string(),
+        "log in, then close this browser window before running `snq session`, `snq fetch`, or other authenticated commands".to_string(),
         "run `snq session` to verify the saved login".to_string(),
     ]
 }

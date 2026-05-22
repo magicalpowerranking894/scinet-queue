@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::env;
 
 use crate::browser::{detect_browser, profile_dir};
 use crate::page::connect_page_session;
@@ -21,6 +22,19 @@ pub(crate) struct DoctorReport {
 impl DoctorReport {
     pub(crate) fn is_ok(&self) -> bool {
         self.ok
+    }
+
+    pub(crate) fn redact(mut self) -> Self {
+        self.browser.path = self.browser.path.map(|path| redact_path_text(&path));
+        self.browser.message = redact_path_text(&self.browser.message);
+        self.profile.path = self.profile.path.map(|path| redact_path_text(&path));
+        self.profile.message = redact_path_text(&self.profile.message);
+        self.queue.path = redact_path_text(&self.queue.path);
+        self.queue.message = redact_path_text(&self.queue.message);
+        self.session.token_balance = None;
+        self.session.url = self.session.url.map(|url| redact_url(&url));
+        self.session.message = redact_path_text(&self.session.message);
+        self
     }
 }
 
@@ -240,6 +254,23 @@ fn doctor_label(ok: bool) -> &'static str {
     if ok { "ok" } else { "warn" }
 }
 
+fn redact_path_text(value: &str) -> String {
+    let Some(home) = env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+    else {
+        return value.to_string();
+    };
+
+    let home = home.display().to_string();
+
+    value.replace(&home, "~")
+}
+
+fn redact_url(value: &str) -> String {
+    value.split(['?', '#']).next().unwrap_or(value).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +296,56 @@ mod tests {
         assert!(!session.ok);
         assert_eq!(session.phase, "auth");
         assert_eq!(session.logged_in, Some(false));
+    }
+
+    #[test]
+    fn report_redaction_hides_home_paths_tokens_and_url_details() {
+        let home = env::var("HOME").unwrap_or_else(|_| "/tmp/snq-home".to_string());
+        let report = DoctorReport {
+            ok: true,
+            version: VERSION.to_string(),
+            scinet_url: SCINET_URL.to_string(),
+            browser: DoctorBrowser {
+                ok: true,
+                engine: Some("chromium".to_string()),
+                path: Some(format!("{home}/Applications/Browser")),
+                message: "found".to_string(),
+            },
+            profile: DoctorProfile {
+                ok: true,
+                path: Some(format!("{home}/.local/state/scinet-queue/browser/chromium")),
+                message: "resolved".to_string(),
+            },
+            queue: DoctorQueue {
+                ok: true,
+                path: format!("{home}/work/.snq/queue.jsonl"),
+                entries: Some(1),
+                message: format!("readable at {home}/work/.snq/queue.jsonl"),
+            },
+            session: DoctorSession {
+                ok: true,
+                phase: "authenticated".to_string(),
+                logged_in: Some(true),
+                token_balance: Some(42),
+                url: Some("https://sci-net.xyz/?token=secret#fragment".to_string()),
+                title: Some("Sci-Net".to_string()),
+                message: format!("logged in with {home}/profile"),
+            },
+        }
+        .redact();
+
+        assert_eq!(
+            report.browser.path.as_deref(),
+            Some("~/Applications/Browser")
+        );
+        assert_eq!(
+            report.profile.path.as_deref(),
+            Some("~/.local/state/scinet-queue/browser/chromium")
+        );
+        assert_eq!(report.queue.path, "~/work/.snq/queue.jsonl");
+        assert!(report.queue.message.contains("~/work/.snq/queue.jsonl"));
+        assert_eq!(report.session.token_balance, None);
+        assert_eq!(report.session.url.as_deref(), Some("https://sci-net.xyz/"));
+        assert!(report.session.message.contains("~/profile"));
     }
 }

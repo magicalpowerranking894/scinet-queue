@@ -115,9 +115,7 @@ pub(crate) fn fetch_one(
     }
 
     let Some(pdf_url) = view.pdf_urls.first() else {
-        if let Some(status) = queue_status(queue, doi)? {
-            let _ = update_status_from_remote(queue, status, doi, remote_state)?;
-        }
+        sync_status_from_remote(queue, doi, remote_state)?;
 
         let availability = scinet_availability(page, doi)?;
         return Ok(FetchResult::NoPdf {
@@ -126,12 +124,13 @@ pub(crate) fn fetch_one(
             availability_links: availability.links,
         });
     };
+
+    fs::create_dir_all(out_dir).map_err(|error| error.to_string())?;
     let download = download_pdf(page, pdf_url).map_err(|error| error.to_string())?;
 
     validate_pdf(&download.bytes)?;
 
-    fs::create_dir_all(out_dir).map_err(|error| error.to_string())?;
-    let out_path = output_path(out_dir, doi, pdf_url);
+    let out_path = output_path_for_bytes(out_dir, doi, pdf_url, &download.bytes)?;
     fs::write(&out_path, download.bytes).map_err(|error| error.to_string())?;
 
     mark_fetched(queue, doi)?;
@@ -201,6 +200,24 @@ fn scinet_availability(
     })
 }
 
+fn sync_status_from_remote(
+    queue: &Queue,
+    doi: &str,
+    remote_state: RequestRemoteState,
+) -> Result<(), String> {
+    let status = match queue_status(queue, doi)? {
+        Some(status) => status,
+        None => {
+            queue.add(doi).map_err(|error| error.to_string())?;
+            QueueStatus::Queued
+        }
+    };
+
+    let _ = update_status_from_remote(queue, status, doi, remote_state)?;
+
+    Ok(())
+}
+
 fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
     match queue
         .set_status(doi, QueueStatus::Fetched)
@@ -216,6 +233,27 @@ fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn output_path_for_bytes(
+    out_dir: &Path,
+    doi: &str,
+    pdf_url: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let path = out_dir.join(pdf_filename(doi, pdf_url));
+
+    if !path.exists() {
+        return Ok(path);
+    }
+
+    let existing = fs::read(&path).map_err(|error| error.to_string())?;
+
+    if existing == bytes {
+        Ok(path)
+    } else {
+        Ok(output_path(out_dir, doi, pdf_url))
+    }
 }
 
 fn validate_pdf(bytes: &[u8]) -> Result<(), String> {
@@ -384,6 +422,38 @@ mod tests {
     }
 
     #[test]
+    fn output_path_for_bytes_reuses_identical_file_only() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-output-path-bytes-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("paper.pdf"), b"%PDF-1.7\nsame").unwrap();
+
+        assert_eq!(
+            output_path_for_bytes(
+                &dir,
+                "10.1000/one",
+                "https://sci-net.xyz/storage/paper.pdf",
+                b"%PDF-1.7\nsame"
+            )
+            .unwrap(),
+            dir.join("paper.pdf")
+        );
+        assert_eq!(
+            output_path_for_bytes(
+                &dir,
+                "10.1000/one",
+                "https://sci-net.xyz/storage/paper.pdf",
+                b"%PDF-1.7\nchanged"
+            )
+            .unwrap(),
+            dir.join("paper-2.pdf")
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn mark_fetched_creates_missing_queue_entry() {
         let dir =
             std::env::temp_dir().join(format!("snq-mark-fetched-test-{}", std::process::id()));
@@ -501,6 +571,92 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn direct_fetch_without_pdf_creates_trackable_queue_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-direct-fetch-pending-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = PendingPageSession { calls: 0 };
+
+        let result = fetch_one(&queue, &mut page, "10.1000/snq-pending", &dir).unwrap();
+
+        match result {
+            FetchResult::NoPdf {
+                remote_state,
+                availability,
+                availability_links,
+            } => {
+                assert_eq!(remote_state, RequestRemoteState::Pending);
+                assert!(availability.is_empty());
+                assert!(availability_links.is_empty());
+            }
+            FetchResult::Fetched(_) => panic!("expected no PDF"),
+        }
+
+        let entries = queue.list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].doi, "10.1000/snq-pending");
+        assert_eq!(entries[0].status, QueueStatus::Requested);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fetch_reuses_existing_pdf_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-fetch-existing-pdf-test-{}",
+            std::process::id()
+        ));
+        let out_dir = dir.join("papers");
+        fs::create_dir_all(&out_dir).unwrap();
+        fs::write(out_dir.join("paper.pdf"), b"%PDF-1.7\nexisting").unwrap();
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = ExistingPdfPageSession { calls: 0 };
+
+        let result = fetch_one(&queue, &mut page, "10.1000/snq-existing", &out_dir).unwrap();
+
+        match result {
+            FetchResult::Fetched(path) => assert_eq!(path, out_dir.join("paper.pdf")),
+            FetchResult::NoPdf { .. } => panic!("expected fetched"),
+        }
+
+        assert_eq!(page.calls, 4);
+        assert!(!out_dir.join("paper-2.pdf").exists());
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Fetched);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn direct_fetch_with_pdf_creates_fetched_entry() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-direct-fetch-pdf-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = DownloadPageSession { calls: 0 };
+
+        let result = fetch_one(&queue, &mut page, "10.1000/snq-direct", &dir).unwrap();
+
+        match result {
+            FetchResult::Fetched(path) => {
+                assert_eq!(path, dir.join("download.pdf"));
+                assert_eq!(fs::read(path).unwrap(), b"%PDF-1.7\nhello");
+            }
+            FetchResult::NoPdf { .. } => panic!("expected fetched"),
+        }
+
+        let entries = queue.list().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].doi, "10.1000/snq-direct");
+        assert_eq!(entries[0].status, QueueStatus::Fetched);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
     struct FakePageSession {
         calls: usize,
     }
@@ -531,6 +687,136 @@ mod tests {
                         "open_access": "https://example.test/open.pdf"
                     }
                 }))
+            }
+        }
+
+        fn close_browser(&mut self) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+    }
+
+    struct PendingPageSession {
+        calls: usize,
+    }
+
+    impl PageSession for PendingPageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(
+            &mut self,
+            _expression: &str,
+        ) -> Result<serde_json::Value, crate::page::PageError> {
+            self.calls += 1;
+
+            if self.calls == 1 {
+                Ok(serde_json::json!({
+                    "title": "Sci-Net",
+                    "url": "https://sci-net.xyz/10.1000/snq-pending",
+                    "text": "Reward: 1 token",
+                    "pdf_urls": []
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "status": 200,
+                    "body": {}
+                }))
+            }
+        }
+
+        fn close_browser(&mut self) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+    }
+
+    struct ExistingPdfPageSession {
+        calls: usize,
+    }
+
+    impl PageSession for ExistingPdfPageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(
+            &mut self,
+            expression: &str,
+        ) -> Result<serde_json::Value, crate::page::PageError> {
+            self.calls += 1;
+
+            match self.calls {
+                1 => Ok(serde_json::json!({
+                    "title": "Sci-Net",
+                    "url": "https://sci-net.xyz/10.1000/snq-existing",
+                    "text": "PDF available",
+                    "pdf_urls": ["https://sci-net.xyz/storage/paper.pdf"]
+                })),
+                2 => Ok(serde_json::json!({
+                    "ok": true,
+                    "status": 200,
+                    "content_type": "application/pdf",
+                    "length": 17
+                })),
+                3 => {
+                    assert!(expression.contains("window.__snqDownloadBytes"));
+                    Ok(serde_json::json!("JVBERi0xLjcKZXhpc3Rpbmc="))
+                }
+                4 => {
+                    assert!(expression.contains("delete window.__snqDownloadBytes"));
+                    Ok(serde_json::json!(true))
+                }
+                _ => Err(crate::page::PageError::UnexpectedResponse(
+                    serde_json::json!({ "error": "unexpected call" }),
+                )),
+            }
+        }
+
+        fn close_browser(&mut self) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+    }
+
+    struct DownloadPageSession {
+        calls: usize,
+    }
+
+    impl PageSession for DownloadPageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(
+            &mut self,
+            expression: &str,
+        ) -> Result<serde_json::Value, crate::page::PageError> {
+            self.calls += 1;
+
+            match self.calls {
+                1 => Ok(serde_json::json!({
+                    "title": "Sci-Net",
+                    "url": "https://sci-net.xyz/10.1000/snq-direct",
+                    "text": "PDF available",
+                    "pdf_urls": ["https://sci-net.xyz/storage/download.pdf"]
+                })),
+                2 => Ok(serde_json::json!({
+                    "ok": true,
+                    "status": 200,
+                    "content_type": "application/pdf",
+                    "length": 14
+                })),
+                3 => {
+                    assert!(expression.contains("window.__snqDownloadBytes"));
+                    Ok(serde_json::json!("JVBERi0xLjcKaGVsbG8="))
+                }
+                4 => {
+                    assert!(expression.contains("delete window.__snqDownloadBytes"));
+                    Ok(serde_json::json!(true))
+                }
+                _ => Err(crate::page::PageError::UnexpectedResponse(
+                    serde_json::json!({ "error": "unexpected call" }),
+                )),
             }
         }
 

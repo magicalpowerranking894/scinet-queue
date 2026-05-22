@@ -328,6 +328,7 @@ loads with a logged-in session:
 ```sh
 snq session
 snq session --json
+snq session --json --redact
 ```
 
 `snq doctor` checks browser discovery, profile path resolution, queue
@@ -337,10 +338,12 @@ be read:
 ```sh
 snq doctor
 snq doctor --json
+snq doctor --json --redact
 ```
 
-`snq doctor` exits nonzero if any check fails. Redact local usernames, profile
-paths, and paper paths before posting doctor output publicly.
+`snq doctor` exits nonzero if any check fails. Add `--redact` before posting
+session or doctor output publicly; it hides local home paths and token balances
+while keeping the useful pass/fail shape.
 
 The login flow avoids decrypting cookies from existing browser profiles or the
 operating system keychain. Importing an existing browser profile is outside the

@@ -6,6 +6,11 @@ pub(crate) struct LoginArgs {
     pub(crate) wait: bool,
 }
 
+pub(crate) struct DiagnosticArgs {
+    pub(crate) json: bool,
+    pub(crate) redact: bool,
+}
+
 pub(crate) struct BrowsersArgs {
     pub(crate) action: BrowsersAction,
     pub(crate) json: bool,
@@ -63,6 +68,24 @@ pub(crate) fn parse_json_flag(
     }
 
     Ok(json)
+}
+
+pub(crate) fn parse_diagnostic_flags(
+    command: &str,
+    args: impl Iterator<Item = String>,
+) -> Result<DiagnosticArgs, String> {
+    let mut json = false;
+    let mut redact = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--redact" => redact = true,
+            unknown => return Err(format!("{command}: unknown option `{unknown}`")),
+        }
+    }
+
+    Ok(DiagnosticArgs { json, redact })
 }
 
 pub(crate) fn parse_login(args: impl Iterator<Item = String>) -> Result<LoginArgs, String> {
@@ -327,6 +350,21 @@ mod tests {
                 .wait
         );
         assert!(parse_login(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn diagnostic_flags_accept_json_and_redaction() {
+        let args = parse_diagnostic_flags(
+            "doctor",
+            ["--json", "--redact"].into_iter().map(str::to_string),
+        )
+        .unwrap();
+
+        assert!(args.json);
+        assert!(args.redact);
+        assert!(
+            parse_diagnostic_flags("doctor", ["--bad"].into_iter().map(str::to_string)).is_err()
+        );
     }
 
     #[test]

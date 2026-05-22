@@ -315,29 +315,34 @@ pub(crate) fn download_pdf(
         })));
     }
 
-    let mut bytes = Vec::with_capacity(response.length);
+    let bytes = (|| {
+        let mut bytes = Vec::with_capacity(response.length);
 
-    for offset in (0..response.length).step_by(DOWNLOAD_CHUNK_SIZE) {
-        let value = page.evaluate_json(&format!(
-            r#"(() => {{
-                const bytes = window.__snqDownloadBytes;
-                if (!bytes) {{
-                    throw new Error('missing snq download buffer');
-                }}
-                const slice = bytes.subarray({offset}, {offset} + {DOWNLOAD_CHUNK_SIZE});
-                let binary = '';
-                const chunk = 0x8000;
-                for (let i = 0; i < slice.length; i += chunk) {{
-                    binary += String.fromCharCode(...slice.subarray(i, i + chunk));
-                }}
-                return btoa(binary);
-            }})()"#
-        ))?;
-        let chunk: String = serde_json::from_value(value)?;
-        bytes.extend(BASE64.decode(chunk)?);
-    }
+        for offset in (0..response.length).step_by(DOWNLOAD_CHUNK_SIZE) {
+            let value = page.evaluate_json(&format!(
+                r#"(() => {{
+                    const bytes = window.__snqDownloadBytes;
+                    if (!bytes) {{
+                        throw new Error('missing snq download buffer');
+                    }}
+                    const slice = bytes.subarray({offset}, {offset} + {DOWNLOAD_CHUNK_SIZE});
+                    let binary = '';
+                    const chunk = 0x8000;
+                    for (let i = 0; i < slice.length; i += chunk) {{
+                        binary += String.fromCharCode(...slice.subarray(i, i + chunk));
+                    }}
+                    return btoa(binary);
+                }})()"#
+            ))?;
+            let chunk: String = serde_json::from_value(value)?;
+            bytes.extend(BASE64.decode(chunk)?);
+        }
+
+        Ok::<Vec<u8>, PageError>(bytes)
+    })();
 
     let _ = page.evaluate_json("(() => { delete window.__snqDownloadBytes; return true; })()");
+    let bytes = bytes?;
 
     Ok(PdfDownload {
         bytes,
@@ -597,6 +602,54 @@ mod tests {
             request_url("https://sci-net.xyz/", "10.1016/s0272-5231(21)01013-3"),
             "https://sci-net.xyz/10.1016/s0272-5231%2821%2901013-3"
         );
+    }
+
+    #[test]
+    fn download_pdf_reassembles_chunks_and_cleans_browser_buffer() {
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        bytes.resize(DOWNLOAD_CHUNK_SIZE + 3, b'x');
+        bytes[DOWNLOAD_CHUNK_SIZE..].copy_from_slice(b"end");
+
+        let first_chunk = BASE64.encode(&bytes[..DOWNLOAD_CHUNK_SIZE]);
+        let second_chunk = BASE64.encode(&bytes[DOWNLOAD_CHUNK_SIZE..]);
+        let mut page = FakePageSession::new(vec![
+            json!({
+                "ok": true,
+                "status": 200,
+                "content_type": "application/pdf",
+                "length": bytes.len()
+            }),
+            json!(first_chunk),
+            json!(second_chunk),
+            json!(true),
+        ]);
+
+        let download = download_pdf(&mut page, "https://sci-net.xyz/storage/paper.pdf").unwrap();
+
+        assert_eq!(download.bytes, bytes);
+        assert_eq!(download.content_type.as_deref(), Some("application/pdf"));
+        assert_eq!(page.expressions.len(), 4);
+        assert!(page.expressions[3].contains("delete window.__snqDownloadBytes"));
+    }
+
+    #[test]
+    fn download_pdf_cleans_browser_buffer_after_chunk_error() {
+        let mut page = FakePageSession::new(vec![
+            json!({
+                "ok": true,
+                "status": 200,
+                "content_type": "application/pdf",
+                "length": 8
+            }),
+            json!(42),
+            json!(true),
+        ]);
+
+        let error = download_pdf(&mut page, "https://sci-net.xyz/storage/paper.pdf").unwrap_err();
+
+        assert!(error.to_string().contains("invalid type"));
+        assert_eq!(page.expressions.len(), 3);
+        assert!(page.expressions[2].contains("delete window.__snqDownloadBytes"));
     }
 
     #[test]
