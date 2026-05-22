@@ -255,16 +255,20 @@ fn doctor_label(ok: bool) -> &'static str {
 }
 
 fn redact_path_text(value: &str) -> String {
-    let Some(home) = env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-    else {
+    let Some(home) = home_dir_text() else {
         return value.to_string();
     };
 
-    let home = home.display().to_string();
-
     value.replace(&home, "~")
+}
+
+fn home_dir_text() -> Option<String> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(std::path::PathBuf::from)
+        .find(|path| !path.as_os_str().is_empty())
+        .map(|path| path.display().to_string())
 }
 
 fn redact_url(value: &str) -> String {
@@ -300,7 +304,7 @@ mod tests {
 
     #[test]
     fn report_redaction_hides_home_paths_tokens_and_url_details() {
-        let home = env::var("HOME").unwrap_or_else(|_| "/tmp/snq-home".to_string());
+        let home = home_dir_text().unwrap_or_else(|| "/tmp/snq-home".to_string());
         let report = DoctorReport {
             ok: true,
             version: VERSION.to_string(),

@@ -423,19 +423,23 @@ fn redact_session_output(mut output: SessionOutput) -> SessionOutput {
 }
 
 fn redact_path_text(value: &str) -> String {
-    let Some(home) = env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-    else {
+    let Some(home) = home_dir_text() else {
         return value.to_string();
     };
-
-    let home = home.display().to_string();
 
     value
         .strip_prefix(&home)
         .map(|suffix| format!("~{suffix}"))
         .unwrap_or_else(|| value.to_string())
+}
+
+fn home_dir_text() -> Option<String> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(std::path::PathBuf::from)
+        .find(|path| !path.as_os_str().is_empty())
+        .map(|path| path.display().to_string())
 }
 
 fn redact_url(value: &str) -> String {
