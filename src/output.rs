@@ -33,7 +33,7 @@ A tiny scriptable queue for Sci-Net paper requests.
 
 Usage:
   snq login [--no-wait]
-  snq session [--json]
+  snq session [--json] [--redact]
   snq browsers [--pick|--set <path>|--clear] [--json]
   snq add <doi>...
   snq import <path|->
@@ -46,7 +46,7 @@ Usage:
   snq url <doi>
   snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>] [--json]
   snq approve <doi> [--force] [--json]
-  snq doctor [--json]
+  snq doctor [--json] [--redact]
 
 Options:
       --json        Print machine-readable JSON where supported
