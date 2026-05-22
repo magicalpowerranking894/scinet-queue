@@ -92,13 +92,13 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/release-notes.md
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - uses: actions/checkout@v6
-        with:
-          sparse-checkout: .github/release-notes.md
 
       - name: Generate checksums
         shell: bash
