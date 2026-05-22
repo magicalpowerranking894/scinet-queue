@@ -8,7 +8,7 @@ mod request;
 
 use crate::args::{
     BrowsersAction, parse_approve, parse_browsers, parse_fetch, parse_json_flag, parse_login,
-    parse_request, parse_view,
+    parse_request, parse_url, parse_view,
 };
 use crate::browser::{
     BROWSER_ENV, Browser, BrowserChoice, BrowserError, available_browser_candidates,
@@ -28,8 +28,8 @@ use crate::queue::{
     normalize_doi,
 };
 use crate::scinet::{
-    RequestView, SCINET_URL, ScinetResponse, probe_current_session, probe_session, search_doi,
-    view_request,
+    RequestView, SCINET_URL, ScinetResponse, probe_current_session, probe_session, request_url,
+    search_doi, view_request,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -351,6 +351,10 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             }
 
             println!("text\t{}", compact_text(&output.text));
+        }
+        Some("url") => {
+            let url_args = parse_url(args)?;
+            println!("{}", request_url(SCINET_URL, &url_args.doi));
         }
         Some("fetch") => {
             let fetch = parse_fetch(args)?;

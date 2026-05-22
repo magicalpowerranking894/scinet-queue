@@ -196,8 +196,7 @@ pub(crate) fn view_request(
     url: &str,
     doi: &str,
 ) -> Result<RequestView, PageError> {
-    let doi_path = doi_path(doi);
-    let view_url = format!("{}/{}", url.trim_end_matches('/'), doi_path);
+    let view_url = request_url(url, doi);
 
     page.navigate(&view_url)?;
 
@@ -220,6 +219,11 @@ pub(crate) fn view_request(
     )?;
 
     serde_json::from_value(value).map_err(PageError::Json)
+}
+
+pub(crate) fn request_url(url: &str, doi: &str) -> String {
+    let doi_path = doi_path(doi);
+    format!("{}/{}", url.trim_end_matches('/'), doi_path)
 }
 
 pub(crate) fn download_pdf(
@@ -462,6 +466,14 @@ mod tests {
     fn encodes_doi_route_while_preserving_slash() {
         assert_eq!(doi_path("10.1000/snq-example"), "10.1000/snq-example");
         assert_eq!(doi_path("10.1000/foo?bar#baz"), "10.1000/foo%3Fbar%23baz");
+    }
+
+    #[test]
+    fn builds_request_url_without_network_access() {
+        assert_eq!(
+            request_url("https://sci-net.xyz/", "10.1016/s0272-5231(21)01013-3"),
+            "https://sci-net.xyz/10.1016/s0272-5231%2821%2901013-3"
+        );
     }
 
     #[test]

@@ -129,6 +129,12 @@ Inspect one remote request:
 snq view 10.1000/snq-example
 ```
 
+Print the Sci-Net request URL for a DOI without opening a browser:
+
+```sh
+snq url '10.1000/snq-example(1)'
+```
+
 Download one available PDF, or fetch available PDFs for queued, requested, and
 working entries:
 

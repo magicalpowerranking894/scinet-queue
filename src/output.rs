@@ -43,6 +43,7 @@ Usage:
   snq request <doi|--all> [--reward <n>] [--json]
   snq watch [--json]
   snq view <doi> [--json]
+  snq url <doi>
   snq fetch [<doi>] [--out <dir>] [--wait] [--poll <seconds>] [--json]
   snq approve <doi> [--force] [--json]
   snq doctor [--json]

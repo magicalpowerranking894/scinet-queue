@@ -8,6 +8,9 @@ not a Sci-Net API contract.
 `snq check <doi>` posts the DOI from the managed browser session and prints the
 Sci-Net response as JSON.
 
+`snq url <doi>` only normalizes and encodes the DOI into its Sci-Net request
+URL. It does not open a browser or call Sci-Net.
+
 Observed outcomes:
 
 - Sci-Net may expose an open-access option.

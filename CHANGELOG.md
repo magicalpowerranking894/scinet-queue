@@ -12,6 +12,8 @@
   output.
 - Documented local and remote queue state movement and clearer `fetch --wait`
   stop conditions.
+- Added `snq url <doi>` for printing a Sci-Net request URL without opening a
+  browser.
 - Synced local queue state when Sci-Net rejects a request for a DOI whose
   request page already exists remotely.
 - Closed waited `snq login` browser sessions gracefully after login detection so

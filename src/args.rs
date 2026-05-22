@@ -38,6 +38,10 @@ pub(crate) struct ViewArgs {
     pub(crate) json: bool,
 }
 
+pub(crate) struct UrlArgs {
+    pub(crate) doi: String,
+}
+
 pub(crate) struct ApproveArgs {
     pub(crate) doi: String,
     pub(crate) force: bool,
@@ -188,6 +192,31 @@ pub(crate) fn parse_view(args: impl Iterator<Item = String>) -> Result<ViewArgs,
     };
 
     Ok(ViewArgs { doi, json })
+}
+
+pub(crate) fn parse_url(args: impl Iterator<Item = String>) -> Result<UrlArgs, String> {
+    let mut doi = None;
+
+    for arg in args {
+        match arg.as_str() {
+            value if value.starts_with('-') => {
+                return Err(format!("url: unknown option `{value}`"));
+            }
+            value => {
+                if doi.is_some() {
+                    return Err(format!("url: unexpected argument `{value}`"));
+                }
+
+                doi = Some(normalize_doi(value).map_err(|error| error.to_string())?);
+            }
+        }
+    }
+
+    let Some(doi) = doi else {
+        return Err("url: missing DOI".to_string());
+    };
+
+    Ok(UrlArgs { doi })
 }
 
 pub(crate) fn parse_approve(args: impl Iterator<Item = String>) -> Result<ApproveArgs, String> {
@@ -488,6 +517,23 @@ mod tests {
         assert!(args.json);
         assert!(parse_view(std::iter::empty()).is_err());
         assert!(parse_view(["--bad"].into_iter().map(str::to_string)).is_err());
+    }
+
+    #[test]
+    fn url_requires_exactly_one_doi() {
+        let args = parse_url(["10.1000/SNQ-EXAMPLE"].into_iter().map(str::to_string)).unwrap();
+
+        assert_eq!(args.doi, "10.1000/snq-example");
+        assert!(parse_url(std::iter::empty()).is_err());
+        assert!(
+            parse_url(
+                ["10.1000/one", "10.1000/two"]
+                    .into_iter()
+                    .map(str::to_string)
+            )
+            .is_err()
+        );
+        assert!(parse_url(["--json"].into_iter().map(str::to_string)).is_err());
     }
 
     #[test]

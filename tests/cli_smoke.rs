@@ -101,6 +101,26 @@ fn rejects_extra_trailing_arguments() {
 }
 
 #[test]
+fn url_prints_scinet_request_url_without_browser() {
+    let dir = temp_workspace("url");
+
+    let output = snq()
+        .current_dir(&dir)
+        .args(["url", "10.1016/s0272-5231(21)01013-3"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "https://sci-net.xyz/10.1016/s0272-5231%2821%2901013-3\n"
+    );
+    assert!(output.stderr.is_empty());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn request_all_json_prints_empty_array_for_empty_queue() {
     let dir = temp_workspace("request-empty-json");
 
