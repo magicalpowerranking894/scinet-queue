@@ -482,6 +482,8 @@ fn is_zen_path(path: &Path) -> bool {
 }
 
 fn ensure_native_profile_unlocked(profile_dir: &Path) -> Result<(), BrowserError> {
+    cleanup_stale_native_profile_locks(profile_dir)?;
+
     for lock_name in ["SingletonLock", "SingletonSocket", "parent.lock"] {
         let lock_path = profile_dir.join(lock_name);
 
@@ -494,6 +496,54 @@ fn ensure_native_profile_unlocked(profile_dir: &Path) -> Result<(), BrowserError
     }
 
     Ok(())
+}
+
+fn cleanup_stale_native_profile_locks(profile_dir: &Path) -> Result<(), BrowserError> {
+    #[cfg(unix)]
+    {
+        let lock_path = profile_dir.join("SingletonLock");
+
+        if let Some(pid) = native_lock_pid(&lock_path) {
+            if !process_exists(pid) {
+                for lock_name in [
+                    "SingletonLock",
+                    "SingletonSocket",
+                    "SingletonCookie",
+                    "DevToolsActivePort",
+                ] {
+                    let path = profile_dir.join(lock_name);
+                    match fs::remove_file(&path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(BrowserError::Io(error)),
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn native_lock_pid(lock_path: &Path) -> Option<u32> {
+    let target = fs::read_link(lock_path).ok()?;
+    let target = target.to_string_lossy();
+    let (_, pid) = target.rsplit_once('-')?;
+
+    pid.parse().ok()
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(true)
 }
 
 fn lock_owner_hint(path: &Path) -> Option<String> {
@@ -857,6 +907,61 @@ mod tests {
         assert!(matches!(error, BrowserError::NativeProfileLocked { .. }));
         assert!(message.contains("managed browser profile appears to be open"));
         assert!(message.contains("snq login --no-wait"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stale_chromium_native_lock_is_removed() {
+        use std::os::unix::fs::symlink;
+
+        let dir = env::temp_dir().join(format!(
+            "snq-stale-native-profile-lock-test-{}",
+            lock_token()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        symlink("host-99999999", dir.join("SingletonLock")).unwrap();
+        symlink("/tmp/snq-missing-socket", dir.join("SingletonSocket")).unwrap();
+        symlink("cookie", dir.join("SingletonCookie")).unwrap();
+        fs::write(
+            dir.join("DevToolsActivePort"),
+            "9222\n/devtools/browser/fake\n",
+        )
+        .unwrap();
+
+        ensure_native_profile_unlocked(&dir).unwrap();
+
+        assert!(fs::symlink_metadata(dir.join("SingletonLock")).is_err());
+        assert!(fs::symlink_metadata(dir.join("SingletonSocket")).is_err());
+        assert!(fs::symlink_metadata(dir.join("SingletonCookie")).is_err());
+        assert!(fs::symlink_metadata(dir.join("DevToolsActivePort")).is_err());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn active_chromium_native_lock_still_blocks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = env::temp_dir().join(format!(
+            "snq-active-native-profile-lock-test-{}",
+            lock_token()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        symlink(
+            format!("host-{}", std::process::id()),
+            dir.join("SingletonLock"),
+        )
+        .unwrap();
+
+        let error = ensure_native_profile_unlocked(&dir).unwrap_err();
+
+        assert!(matches!(error, BrowserError::NativeProfileLocked { .. }));
+        assert!(fs::symlink_metadata(dir.join("SingletonLock")).is_ok());
 
         let _ = fs::remove_dir_all(dir);
     }

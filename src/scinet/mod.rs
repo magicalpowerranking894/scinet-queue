@@ -170,7 +170,9 @@ pub(crate) fn probe_current_session(
 
 fn read_session(page: &mut impl PageSession) -> Result<SessionProbe, PageError> {
     let value = page.evaluate_json(
-        r#"(() => {
+        r#"(async () => {
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
             const parseBalance = (value) => {
                 if (typeof value === 'number' && Number.isFinite(value)) {
                     return Math.trunc(value);
@@ -181,38 +183,67 @@ fn read_session(page: &mut impl PageSession) -> Result<SessionProbe, PageError> 
                 }
 
                 const trimmed = value.replace(/,/g, '').trim();
-                if (!/^\d+$/.test(trimmed)) {
+                if (/^\d+$/.test(trimmed)) {
+                    return Number(trimmed);
+                }
+
+                const tokenMatch = trimmed.match(/\btokens?\b\D+(\d+)/i)
+                    || trimmed.match(/(\d+)\D+\btokens?\b/i);
+                if (!tokenMatch) {
                     return null;
                 }
 
-                return Number(trimmed);
+                return Number(tokenMatch[1]);
             };
 
-            const candidates = [];
-            if (typeof window.balance !== 'undefined') {
-                candidates.push(window.balance);
-            }
+            const pageText = () => (document.body && document.body.innerText || '');
+            const looksLoggedOut = () => {
+                const text = pageText().toLowerCase();
+                return text.includes('username')
+                    && text.includes('password')
+                    && (text.includes('no account yet') || text.includes('join'));
+            };
 
-            for (const selector of ['a.points span', '.controls .points span', '.points span']) {
-                const element = document.querySelector(selector);
-                if (element) {
-                    candidates.push(element.textContent || element.innerText || '');
+            const readBalance = () => {
+                const candidates = [];
+                if (typeof window.balance !== 'undefined') {
+                    candidates.push(window.balance);
                 }
-            }
 
-            let tokenBalance = null;
-            for (const candidate of candidates) {
-                const parsed = parseBalance(candidate);
-                if (Number.isInteger(parsed) && parsed >= 0) {
-                    tokenBalance = parsed;
-                    break;
+                for (const selector of [
+                    'a.points',
+                    '.controls .points',
+                    '.points',
+                    'a.points span',
+                    '.controls .points span',
+                    '.points span'
+                ]) {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        candidates.push(element.textContent || element.innerText || '');
+                    }
                 }
+
+                for (const candidate of candidates) {
+                    const parsed = parseBalance(candidate);
+                    if (Number.isInteger(parsed) && parsed >= 0) {
+                        return parsed;
+                    }
+                }
+
+                return null;
+            };
+
+            let tokenBalance = readBalance();
+            for (let attempt = 0; tokenBalance === null && attempt < 15 && !looksLoggedOut(); attempt += 1) {
+                await sleep(100);
+                tokenBalance = readBalance();
             }
 
             return {
                 title: document.title,
                 url: location.href,
-                text: (document.body && document.body.innerText || '').slice(0, 4000),
+                text: pageText().slice(0, 4000),
                 token_balance: tokenBalance
             };
         })()"#,
