@@ -114,6 +114,13 @@ snq request --all --reward 1
 ```
 
 If `--reward` is omitted, `snq` uses `1`.
+Add `--budget-check` to read the visible Sci-Net token balance first and fail
+before posting any request if the balance cannot cover the requested reward:
+
+```sh
+snq request --all --reward 1 --budget-check
+```
+
 If Sci-Net reports that a request cannot be created but the DOI already has a
 visible request page, `snq` syncs the local queue to that remote state.
 
@@ -174,7 +181,7 @@ Agent-facing JSON is available for commands that need structured output:
 snq session --json
 snq browsers --json
 snq list --json
-snq request --all --reward 1 --json
+snq request --all --reward 1 --budget-check --json
 snq watch --json
 snq view 10.1000/snq-example --json
 snq fetch --json
@@ -322,7 +329,8 @@ snq session --json
 ```
 
 `snq doctor` checks browser discovery, profile path resolution, queue
-readability, and Sci-Net session state:
+readability, Sci-Net session state, and the visible token balance when it can
+be read:
 
 ```sh
 snq doctor

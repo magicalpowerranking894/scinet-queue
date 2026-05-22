@@ -2,7 +2,10 @@ use crate::args::RequestArgs;
 use crate::output::{RequestOutput, format_response, print_json};
 use crate::page::PageSession;
 use crate::queue::{Queue, QueueStatus, StatusResult};
-use crate::scinet::{RequestRemoteState, SCINET_URL, ScinetResponse, request_doi, view_request};
+use crate::scinet::{
+    RequestRemoteState, SCINET_URL, ScinetResponse, probe_current_session, request_doi,
+    view_request,
+};
 
 pub(super) fn handle_request(queue: &Queue, request: RequestArgs) -> Result<(), String> {
     let dois = request_dois(queue, &request)?;
@@ -19,6 +22,11 @@ pub(super) fn handle_request(queue: &Queue, request: RequestArgs) -> Result<(), 
 
     let results = super::with_scinet_page(!request.json, |page| {
         let mut results = Vec::new();
+
+        if request.budget_check {
+            let probe = probe_current_session(page).map_err(|error| error.to_string())?;
+            ensure_budget(probe.token_balance, request.reward, dois.len())?;
+        }
 
         for doi in &dois {
             let response = request_doi(page, SCINET_URL, doi, request.reward)
@@ -51,6 +59,27 @@ pub(super) fn handle_request(queue: &Queue, request: RequestArgs) -> Result<(), 
             None if request.all => println!("requested\t{}", result.doi),
             None => println!("{}", format_response(&result.response)?),
         }
+    }
+
+    Ok(())
+}
+
+fn ensure_budget(balance: Option<u32>, reward: u32, count: usize) -> Result<(), String> {
+    let Some(balance) = balance else {
+        return Err(
+            "request: could not determine Sci-Net token balance; retry without --budget-check to let Sci-Net decide"
+                .to_string(),
+        );
+    };
+    let count = u64::try_from(count).map_err(|_| "request: too many request targets")?;
+    let required = u64::from(reward)
+        .checked_mul(count)
+        .ok_or("request: budget calculation overflowed")?;
+
+    if u64::from(balance) < required {
+        return Err(format!(
+            "request: budget check failed: {required} tokens required, {balance} available"
+        ));
     }
 
     Ok(())
@@ -169,6 +198,7 @@ mod tests {
             doi: None,
             reward: 1,
             all: true,
+            budget_check: false,
             json: false,
         };
 
@@ -309,6 +339,26 @@ mod tests {
 
         let error = ensure_request_ok("10.1000/snq-alt", &response).unwrap_err();
         assert!(error.contains("invalid request"));
+    }
+
+    #[test]
+    fn budget_check_allows_sufficient_balance() {
+        ensure_budget(Some(3), 1, 3).unwrap();
+        ensure_budget(Some(3), 3, 1).unwrap();
+    }
+
+    #[test]
+    fn budget_check_rejects_missing_or_insufficient_balance() {
+        assert!(
+            ensure_budget(None, 1, 1)
+                .unwrap_err()
+                .contains("could not determine")
+        );
+        assert!(
+            ensure_budget(Some(2), 1, 3)
+                .unwrap_err()
+                .contains("3 tokens required, 2 available")
+        );
     }
 
     struct FakePageSession {

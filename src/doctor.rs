@@ -52,6 +52,7 @@ struct DoctorSession {
     ok: bool,
     phase: String,
     logged_in: Option<bool>,
+    token_balance: Option<u32>,
     url: Option<String>,
     title: Option<String>,
     message: String,
@@ -185,6 +186,12 @@ pub(crate) fn print_doctor_report(report: &DoctorReport) {
     if let Some(url) = &report.session.url {
         println!("session_url\t{url}");
     }
+    if report.session.logged_in == Some(true) {
+        match report.session.token_balance {
+            Some(token_balance) => println!("session_tokens\t{token_balance}"),
+            None => println!("session_tokens\tunknown"),
+        }
+    }
 }
 
 fn session_from_probe(probe: SessionProbe) -> DoctorSession {
@@ -194,6 +201,7 @@ fn session_from_probe(probe: SessionProbe) -> DoctorSession {
         ok: logged_in,
         phase: if logged_in { "authenticated" } else { "auth" }.to_string(),
         logged_in: Some(logged_in),
+        token_balance: if logged_in { probe.token_balance } else { None },
         url: Some(probe.url),
         title: Some(probe.title),
         message: if logged_in {
@@ -209,6 +217,7 @@ fn session_failure(phase: &str, error: impl ToString) -> DoctorSession {
         ok: false,
         phase: phase.to_string(),
         logged_in: None,
+        token_balance: None,
         url: None,
         title: None,
         message: format!("{phase} failed: {}", error.to_string()),
@@ -220,6 +229,7 @@ fn session_skipped(message: &str) -> DoctorSession {
         ok: false,
         phase: "skipped".to_string(),
         logged_in: None,
+        token_balance: None,
         url: None,
         title: None,
         message: message.to_string(),
@@ -249,6 +259,7 @@ mod tests {
             title: "Sci-Net".to_string(),
             url: "https://sci-net.xyz/".to_string(),
             text: "scientific communication support network No account yet?".to_string(),
+            token_balance: None,
         });
 
         assert!(!session.ok);

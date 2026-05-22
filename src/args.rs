@@ -22,6 +22,7 @@ pub(crate) struct RequestArgs {
     pub(crate) doi: Option<String>,
     pub(crate) reward: u32,
     pub(crate) all: bool,
+    pub(crate) budget_check: bool,
     pub(crate) json: bool,
 }
 
@@ -118,12 +119,14 @@ pub(crate) fn parse_request(args: impl Iterator<Item = String>) -> Result<Reques
     let mut doi = None;
     let mut reward = 1;
     let mut all = false;
+    let mut budget_check = false;
     let mut json = false;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--all" => all = true,
+            "--budget-check" => budget_check = true,
             "--json" => json = true,
             "--reward" | "-r" => {
                 let Some(value) = args.next() else {
@@ -163,6 +166,7 @@ pub(crate) fn parse_request(args: impl Iterator<Item = String>) -> Result<Reques
         doi,
         reward,
         all,
+        budget_check,
         json,
     })
 }
@@ -361,6 +365,7 @@ mod tests {
         assert_eq!(args.doi.as_deref(), Some("10.1000/snq-example"));
         assert_eq!(args.reward, 1);
         assert!(!args.all);
+        assert!(!args.budget_check);
     }
 
     #[test]
@@ -371,6 +376,7 @@ mod tests {
         assert!(args.doi.is_none());
         assert_eq!(args.reward, 3);
         assert!(args.all);
+        assert!(!args.budget_check);
         assert!(!args.json);
 
         assert_eq!(
@@ -388,13 +394,14 @@ mod tests {
     #[test]
     fn request_accepts_json_flag() {
         let args = parse_request(
-            ["--all", "--reward", "1", "--json"]
+            ["--all", "--reward", "1", "--budget-check", "--json"]
                 .into_iter()
                 .map(str::to_string),
         )
         .unwrap();
 
         assert!(args.all);
+        assert!(args.budget_check);
         assert!(args.json);
     }
 

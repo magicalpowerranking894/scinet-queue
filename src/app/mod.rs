@@ -183,6 +183,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 url: probe.url,
                 title: probe.title,
                 logged_in,
+                token_balance: probe.token_balance,
             };
 
             if json {
@@ -204,6 +205,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                     "not detected"
                 }
             );
+            if let Some(token_balance) = output.token_balance {
+                println!("tokens {token_balance}");
+            }
         }
         Some("browsers") => {
             let browser_args = parse_browsers(args)?;

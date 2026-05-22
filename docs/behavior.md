@@ -22,6 +22,12 @@ Observed outcomes:
 `snq request <doi> --reward <n>` creates a request from the managed session.
 The local queue is marked `requested` after a successful request call.
 
+With `--budget-check`, `snq` reads the visible token balance from the logged-in
+Sci-Net page before posting any request. If the balance is unavailable or lower
+than `reward * targeted DOI count`, the command fails locally before calling
+Sci-Net's request endpoint. The check is a guard, not a reservation; Sci-Net can
+still reject a later request if the site state changes.
+
 If Sci-Net rejects a request but the DOI's request page already exists and is
 visible in the managed session, `snq` treats that as an existing remote request
 and syncs the local queue instead of leaving it queued.

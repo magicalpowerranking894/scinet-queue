@@ -16,6 +16,9 @@
   browser.
 - Downloaded large request-page PDFs from the managed browser in bounded chunks
   to avoid browser protocol message limits.
+- Reported visible Sci-Net token balance in `session` and `doctor` output.
+- Added `request --budget-check` to fail before posting requests when the
+  visible token balance cannot cover the selected reward.
 - Surfaced Sci-Net/Crossref not-found reasons when response bodies include
   them.
 - Synced local queue state when Sci-Net rejects a request for a DOI whose

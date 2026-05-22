@@ -126,7 +126,14 @@ fn request_all_json_prints_empty_array_for_empty_queue() {
 
     let request = snq()
         .current_dir(&dir)
-        .args(["request", "--all", "--reward", "1", "--json"])
+        .args([
+            "request",
+            "--all",
+            "--reward",
+            "1",
+            "--budget-check",
+            "--json",
+        ])
         .output()
         .unwrap();
 

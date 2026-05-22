@@ -15,6 +15,7 @@ pub(crate) struct SessionProbe {
     pub(crate) title: String,
     pub(crate) url: String,
     pub(crate) text: String,
+    pub(crate) token_balance: Option<u32>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -164,7 +165,52 @@ pub(crate) fn probe_current_session(
 
 fn read_session(page: &mut impl PageSession) -> Result<SessionProbe, PageError> {
     let value = page.evaluate_json(
-        "({ title: document.title, url: location.href, text: (document.body && document.body.innerText || '').slice(0, 4000) })",
+        r#"(() => {
+            const parseBalance = (value) => {
+                if (typeof value === 'number' && Number.isFinite(value)) {
+                    return Math.trunc(value);
+                }
+
+                if (typeof value !== 'string') {
+                    return null;
+                }
+
+                const trimmed = value.replace(/,/g, '').trim();
+                if (!/^\d+$/.test(trimmed)) {
+                    return null;
+                }
+
+                return Number(trimmed);
+            };
+
+            const candidates = [];
+            if (typeof window.balance !== 'undefined') {
+                candidates.push(window.balance);
+            }
+
+            for (const selector of ['a.points span', '.controls .points span', '.points span']) {
+                const element = document.querySelector(selector);
+                if (element) {
+                    candidates.push(element.textContent || element.innerText || '');
+                }
+            }
+
+            let tokenBalance = null;
+            for (const candidate of candidates) {
+                const parsed = parseBalance(candidate);
+                if (Number.isInteger(parsed) && parsed >= 0) {
+                    tokenBalance = parsed;
+                    break;
+                }
+            }
+
+            return {
+                title: document.title,
+                url: location.href,
+                text: (document.body && document.body.innerText || '').slice(0, 4000),
+                token_balance: tokenBalance
+            };
+        })()"#,
     )?;
 
     serde_json::from_value(value).map_err(PageError::Json)
@@ -412,9 +458,25 @@ mod tests {
         let probe = probe_session(&mut page, SCINET_URL).unwrap();
 
         assert!(probe.is_logged_in());
+        assert_eq!(probe.token_balance, None);
         assert_eq!(page.navigations, vec![SCINET_URL.to_string()]);
         assert_eq!(page.expressions.len(), 1);
         assert!(page.expressions[0].contains("document.body"));
+    }
+
+    #[test]
+    fn session_probe_reports_token_balance() {
+        let mut page = FakePageSession::new(vec![json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/",
+            "text": "library tokens request",
+            "token_balance": 8
+        })]);
+
+        let probe = probe_current_session(&mut page).unwrap();
+
+        assert_eq!(probe.token_balance, Some(8));
+        assert!(page.navigations.is_empty());
     }
 
     #[test]
@@ -439,6 +501,7 @@ mod tests {
             title: "Sci-Net".to_string(),
             url: "https://sci-net.xyz/".to_string(),
             text: "tokens request library".to_string(),
+            token_balance: Some(8),
         };
 
         assert!(probe.is_logged_in());
@@ -450,6 +513,7 @@ mod tests {
             title: "Sci-Net".to_string(),
             url: "https://sci-net.xyz/".to_string(),
             text: "scientific communication support network No account yet? Join decentralized tokens reward request".to_string(),
+            token_balance: None,
         };
 
         assert!(!probe.is_logged_in());

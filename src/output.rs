@@ -40,7 +40,7 @@ Usage:
   snq list [--json]
   snq remove <doi>
   snq check <doi>
-  snq request <doi|--all> [--reward <n>] [--json]
+  snq request <doi|--all> [--reward <n>] [--budget-check] [--json]
   snq watch [--json]
   snq view <doi> [--json]
   snq url <doi>
@@ -69,6 +69,7 @@ pub(crate) struct SessionOutput {
     pub(crate) url: String,
     pub(crate) title: String,
     pub(crate) logged_in: bool,
+    pub(crate) token_balance: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
