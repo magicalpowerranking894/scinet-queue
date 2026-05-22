@@ -8,8 +8,8 @@ requests. The binary is `snq`.
 The project is in early development. The current build supports
 workspace-local queues, browser selection, managed login/session checks,
 Sci-Net check/request/watch/view/url/fetch workflows, local approval state,
-token budget checks, JSON output, and doctor diagnostics. macOS, Linux, and
-Windows builds are checked in CI.
+token balance and budget checks, JSON output, and doctor diagnostics. macOS,
+Linux, and Windows builds are checked in CI.
 
 Authenticated commands use a managed browser profile. Chromium-compatible
 browsers are supported through Chrome DevTools Protocol. Firefox/Gecko-based
@@ -120,6 +120,7 @@ Add `--budget-check` to read the visible Sci-Net token balance first and fail
 before posting any request if the balance cannot cover the requested reward:
 
 ```sh
+snq balance
 snq request --all --reward 1 --budget-check
 ```
 
@@ -181,6 +182,7 @@ Agent-facing JSON is available for commands that need structured output:
 
 ```sh
 snq session --json
+snq balance --json
 snq browsers --json
 snq list --json
 snq request --all --reward 1 --budget-check --json
@@ -329,6 +331,14 @@ loads with a logged-in session:
 snq session
 snq session --json
 snq session --json --redact
+```
+
+`snq balance` starts the same managed profile headlessly and prints the visible
+Sci-Net token balance:
+
+```sh
+snq balance
+snq balance --json
 ```
 
 `snq doctor` checks browser discovery, profile path resolution, queue

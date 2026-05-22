@@ -10,6 +10,7 @@ Highlights in the current build:
   workflows.
 - JSON output for agent workflows, including Sci-Net availability links and
   token balance diagnostics.
+- `balance` to print the visible Sci-Net token balance directly.
 - `request --budget-check` to fail before posting requests when visible token
   balance is too low.
 - Browser discovery for Chromium-compatible and Firefox/Gecko-based browsers

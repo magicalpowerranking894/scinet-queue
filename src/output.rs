@@ -34,6 +34,7 @@ A tiny scriptable queue for Sci-Net paper requests.
 Usage:
   snq login [--no-wait]
   snq session [--json] [--redact]
+  snq balance [--json]
   snq browsers [--pick|--set <path>|--clear] [--json]
   snq add <doi>...
   snq import <path|->
@@ -71,6 +72,12 @@ pub(crate) struct SessionOutput {
     pub(crate) title: String,
     pub(crate) logged_in: bool,
     pub(crate) token_balance: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BalanceOutput {
+    pub(crate) logged_in: bool,
+    pub(crate) token_balance: u32,
 }
 
 #[derive(Debug, Serialize)]

@@ -29,7 +29,9 @@ fn write_fake_browser(path: &std::path::Path) {
 fn help_and_version_work() {
     let help = snq().arg("--help").output().unwrap();
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("Usage:"));
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(help_text.contains("Usage:"));
+    assert!(help_text.contains("snq balance [--json]"));
 
     let command_help = snq().args(["request", "--help"]).output().unwrap();
     assert!(command_help.status.success());
@@ -282,6 +284,23 @@ fn missing_browser_preference_errors_before_launch() {
             .contains("configured browser does not exist")
     );
 
+    let output = snq()
+        .current_dir(&dir)
+        .args(["balance", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("configured browser does not exist")
+    );
+
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -313,6 +332,19 @@ fn invalid_browser_preference_is_reported_and_recoverable() {
     assert!(!session.status.success());
     assert!(session.stdout.is_empty());
     let value: serde_json::Value = serde_json::from_slice(&session.stderr).unwrap();
+    let error = value["error"].as_str().unwrap();
+    assert!(error.contains("could not parse browser preference .snq/browser.json"));
+    assert!(error.contains("snq browsers --clear"));
+
+    let balance = snq()
+        .current_dir(&dir)
+        .args(["balance", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!balance.status.success());
+    assert!(balance.stdout.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&balance.stderr).unwrap();
     let error = value["error"].as_str().unwrap();
     assert!(error.contains("could not parse browser preference .snq/browser.json"));
     assert!(error.contains("snq browsers --clear"));

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 mod fetch;
 mod request;
+mod session;
 
 use crate::args::{
     BrowsersAction, parse_approve, parse_browsers, parse_diagnostic_flags, parse_fetch,
@@ -18,8 +19,8 @@ use crate::browser::{
 };
 use crate::doctor::{doctor_report, print_doctor_report};
 use crate::output::{
-    ApproveOutput, BrowserChoiceOutput, BrowserListOutput, SessionOutput, ViewOutput, WatchOutput,
-    compact_text, format_response, print_help, print_json,
+    ApproveOutput, BrowserChoiceOutput, BrowserListOutput, ViewOutput, WatchOutput, compact_text,
+    format_response, print_help, print_json,
 };
 use crate::page::{BrowserPageSession, PageError, PageSession, connect_page_session};
 use crate::papers::{extract_dois, read_import_text, update_status_from_remote};
@@ -165,54 +166,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         Some("session") => {
             let diagnostic = parse_diagnostic_flags("session", args)?;
-            let browser = detect_browser_or_prompt(!diagnostic.json)?;
-            let profile_dir = profile_dir(&browser).map_err(|error| error.to_string())?;
-            let session_browser = browser
-                .launch_session(&profile_dir, true)
-                .map_err(|error| error.to_string())?;
-            let mut page = connect_page_session(browser.engine, session_browser.port())
-                .map_err(|error| error.to_string())?;
-            let probe = probe_session(&mut page, SCINET_URL).map_err(|error| error.to_string())?;
-            let logged_in = probe.is_logged_in();
-
-            let output = SessionOutput {
-                browser: browser.path.display().to_string(),
-                engine: browser.engine.to_string(),
-                profile: profile_dir.display().to_string(),
-                queue: default_queue_path().display().to_string(),
-                url: probe.url,
-                title: probe.title,
-                logged_in,
-                token_balance: if logged_in { probe.token_balance } else { None },
-            };
-            let output = if diagnostic.redact {
-                redact_session_output(output)
-            } else {
-                output
-            };
-
-            if diagnostic.json {
-                print_json(&output)?;
-                return Ok(());
-            }
-
-            println!("browser {}", output.browser);
-            println!("engine {}", output.engine);
-            println!("profile {}", output.profile);
-            println!("queue {}", output.queue);
-            println!("url {}", output.url);
-            println!("title {}", output.title);
-            println!(
-                "login {}",
-                if output.logged_in {
-                    "detected"
-                } else {
-                    "not detected"
-                }
-            );
-            if let Some(token_balance) = output.token_balance {
-                println!("tokens {token_balance}");
-            }
+            session::handle_session(diagnostic)?;
+        }
+        Some("balance") => {
+            let json = parse_json_flag("balance", args)?;
+            session::handle_balance(json)?;
         }
         Some("browsers") => {
             let browser_args = parse_browsers(args)?;
@@ -411,39 +369,6 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-fn redact_session_output(mut output: SessionOutput) -> SessionOutput {
-    output.browser = redact_path_text(&output.browser);
-    output.profile = redact_path_text(&output.profile);
-    output.queue = redact_path_text(&output.queue);
-    output.url = redact_url(&output.url);
-    output.token_balance = None;
-    output
-}
-
-fn redact_path_text(value: &str) -> String {
-    let Some(home) = home_dir_text() else {
-        return value.to_string();
-    };
-
-    value
-        .strip_prefix(&home)
-        .map(|suffix| format!("~{suffix}"))
-        .unwrap_or_else(|| value.to_string())
-}
-
-fn home_dir_text() -> Option<String> {
-    ["HOME", "USERPROFILE"]
-        .into_iter()
-        .filter_map(env::var_os)
-        .map(std::path::PathBuf::from)
-        .find(|path| !path.as_os_str().is_empty())
-        .map(|path| path.display().to_string())
-}
-
-fn redact_url(value: &str) -> String {
-    value.split(['?', '#']).next().unwrap_or(value).to_string()
 }
 
 fn with_scinet_session<F>(interactive: bool, operation: F) -> Result<ScinetResponse, String>

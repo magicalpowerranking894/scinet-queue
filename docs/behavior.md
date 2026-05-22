@@ -18,6 +18,9 @@ Observed outcomes:
 
 ## Requests
 
+`snq balance` reads the visible token balance from the logged-in managed
+session. It fails if the session is logged out or the balance cannot be read.
+
 `snq request <doi> --reward <n>` creates a request from the managed session.
 The local queue is marked `requested` after a successful request call.
 
