@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Current
 
 - Reorganized app, browser, and Sci-Net code into module folders for cleaner
   long-term ownership boundaries.
@@ -49,7 +49,7 @@
   `SHA256SUMS`.
 - Documented release binary installation and the release process.
 
-## 0.1.0 - 2026-05-20
+## Initial Public Build - 2026-05-20
 
 - Added a workspace-local DOI queue.
 - Added managed browser login and headless Sci-Net session reuse.

@@ -5,16 +5,18 @@
 `scinet-queue` is a small command-line tool for managing Sci-Net paper
 requests. The binary is `snq`.
 
-The project is in early development. The local queue, browser session probe,
-Sci-Net search, request, watch, fetch, local approve, JSON output, and doctor
-commands are supported. macOS, Linux, and Windows builds are checked in CI.
+The project is in early development. The current build supports
+workspace-local queues, browser selection, managed login/session checks,
+Sci-Net check/request/watch/view/url/fetch workflows, local approval state,
+token budget checks, JSON output, and doctor diagnostics. macOS, Linux, and
+Windows builds are checked in CI.
 
 Authenticated commands use a managed browser profile. Chromium-compatible
 browsers are supported through Chrome DevTools Protocol. Firefox/Gecko-based
 browsers are supported through WebDriver BiDi.
 
 `snq` does not bundle a browser, import cookies from an existing browser
-profile, or approve tokens automatically.
+profile, or release tokens automatically.
 
 ## Install
 

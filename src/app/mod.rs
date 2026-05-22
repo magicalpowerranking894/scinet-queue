@@ -183,7 +183,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                 url: probe.url,
                 title: probe.title,
                 logged_in,
-                token_balance: probe.token_balance,
+                token_balance: if logged_in { probe.token_balance } else { None },
             };
 
             if json {

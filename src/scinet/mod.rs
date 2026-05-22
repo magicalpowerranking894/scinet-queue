@@ -87,9 +87,14 @@ impl RequestView {
     }
 
     pub(crate) fn matches_doi(&self, doi: &str) -> bool {
-        self.text
-            .to_ascii_lowercase()
-            .contains(&doi.to_ascii_lowercase())
+        let doi = doi.to_ascii_lowercase();
+
+        if self.text.to_ascii_lowercase().contains(&doi) {
+            return true;
+        }
+
+        self.url
+            .eq_ignore_ascii_case(&request_url(SCINET_URL, &doi))
     }
 }
 
@@ -544,6 +549,31 @@ mod tests {
         };
 
         assert_eq!(view.remote_state(), RequestRemoteState::Working);
+    }
+
+    #[test]
+    fn request_view_matches_doi_from_body_text() {
+        let view = RequestView {
+            title: "Sci-Net".to_string(),
+            url: "https://sci-net.xyz/request".to_string(),
+            text: "Pending request for 10.1000/snq-example".to_string(),
+            pdf_urls: Vec::new(),
+        };
+
+        assert!(view.matches_doi("10.1000/snq-example"));
+    }
+
+    #[test]
+    fn request_view_matches_doi_from_request_url() {
+        let doi = "10.1016/s0272-5231(21)01013-3";
+        let view = RequestView {
+            title: "Sci-Net".to_string(),
+            url: request_url(SCINET_URL, doi),
+            text: "Pending request".to_string(),
+            pdf_urls: Vec::new(),
+        };
+
+        assert!(view.matches_doi(doi));
     }
 
     #[test]

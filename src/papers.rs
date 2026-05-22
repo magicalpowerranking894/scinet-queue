@@ -119,7 +119,7 @@ pub(crate) fn fetch_one(
             let _ = update_status_from_remote(queue, status, doi, remote_state)?;
         }
 
-        let availability = scinet_availability(page, doi);
+        let availability = scinet_availability(page, doi)?;
         return Ok(FetchResult::NoPdf {
             remote_state,
             availability: availability.kinds,
@@ -181,18 +181,16 @@ struct ScinetAvailabilityResult {
     links: Vec<ScinetAvailabilityLink>,
 }
 
-fn scinet_availability(page: &mut impl PageSession, doi: &str) -> ScinetAvailabilityResult {
-    let Ok(response) = search_doi(page, SCINET_URL, doi) else {
-        return ScinetAvailabilityResult {
-            kinds: Vec::new(),
-            links: Vec::new(),
-        };
-    };
+fn scinet_availability(
+    page: &mut impl PageSession,
+    doi: &str,
+) -> Result<ScinetAvailabilityResult, String> {
+    let response = search_doi(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
 
-    ScinetAvailabilityResult {
+    Ok(ScinetAvailabilityResult {
         kinds: response.availability(),
         links: response.availability_links(),
-    }
+    })
 }
 
 fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -429,6 +427,25 @@ mod tests {
     }
 
     #[test]
+    fn fetch_one_surfaces_availability_probe_failure() {
+        let dir = std::env::temp_dir().join(format!("snq-fetch-error-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = FailingSearchPageSession { calls: 0 };
+
+        queue.add("10.1000/snq-example").unwrap();
+        let error = match fetch_one(&queue, &mut page, "10.1000/snq-example", &dir) {
+            Ok(_) => panic!("expected availability probe error"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("unexpected browser response"));
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Working);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn remote_working_state_does_not_regress_fetched_entries() {
         let dir =
             std::env::temp_dir().join(format!("snq-fetch-no-regress-test-{}", std::process::id()));
@@ -485,6 +502,40 @@ mod tests {
                     }
                 }))
             }
+        }
+
+        fn close_browser(&mut self) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+    }
+
+    struct FailingSearchPageSession {
+        calls: usize,
+    }
+
+    impl PageSession for FailingSearchPageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(
+            &mut self,
+            _expression: &str,
+        ) -> Result<serde_json::Value, crate::page::PageError> {
+            self.calls += 1;
+
+            if self.calls == 1 {
+                return Ok(serde_json::json!({
+                    "title": "Sci-Net",
+                    "url": "https://sci-net.xyz/10.1000/snq-example",
+                    "text": "A member is working on solving this request and will upload PDF soon.",
+                    "pdf_urls": []
+                }));
+            }
+
+            Err(crate::page::PageError::UnexpectedResponse(
+                serde_json::json!({ "error": "search unavailable" }),
+            ))
         }
 
         fn close_browser(&mut self) -> Result<(), crate::page::PageError> {

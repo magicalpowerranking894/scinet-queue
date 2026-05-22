@@ -19,10 +19,11 @@ cargo package --locked
 
 ## Release Process
 
-Releases are tagged from `main` after the full CI matrix passes.
+The project currently keeps one canonical public release, `v0.1.0`, until a
+real version bump is intentionally planned. Refresh that release only after the
+full CI matrix passes on `main`.
 
-1. Update `Cargo.toml` and `CHANGELOG.md` for the new version.
-2. Run the local release checks:
+1. Run the local release checks:
 
 ```sh
 cargo fmt --all --check
@@ -31,14 +32,15 @@ cargo test --locked
 cargo package --locked
 ```
 
-3. Create and push a version tag:
+2. Move the canonical tag to the tested `main` commit:
 
 ```sh
-git tag -s v0.1.1 -m "v0.1.1"
-git push origin v0.1.1
+git fetch origin main --tags
+git tag -f v0.1.0 origin/main
+git push --force origin refs/tags/v0.1.0
 ```
 
-4. Wait for the release workflow to upload archives for:
+3. Wait for the release workflow to upload archives for:
 
 ```text
 x86_64-unknown-linux-gnu
@@ -47,8 +49,7 @@ aarch64-apple-darwin
 x86_64-pc-windows-msvc
 ```
 
-5. Check the release assets and `SHA256SUMS` before publishing the draft
-   release.
+4. Check the release assets and `SHA256SUMS`.
 
 ## Pull Requests
 
@@ -63,14 +64,14 @@ x86_64-pc-windows-msvc
 ## Project Layout
 
 - `src/main.rs`: binary entrypoint only.
-- `src/app.rs`: command dispatch and workflow glue.
+- `src/app/`: command dispatch and workflow glue.
 - `src/args.rs`: handwritten argument parsing.
 - `src/output.rs`: text and JSON output shapes.
-- `src/browser.rs`: browser-engine discovery, profile paths, and process launch.
+- `src/browser/`: browser-engine discovery, profile paths, and process launch.
 - `src/page.rs`: protocol-neutral page/session wrapper.
 - `src/cdp.rs`: Chrome DevTools Protocol transport for Chromium-compatible browsers.
 - `src/bidi.rs`: WebDriver BiDi transport for Firefox/Gecko-based browsers.
-- `src/scinet.rs`: Sci-Net session, request, view, and remote-state behavior.
+- `src/scinet/`: Sci-Net session, request, view, and remote-state behavior.
 - `src/papers.rs`: DOI extraction, PDF naming, fetch validation.
 - `src/queue.rs`: workspace-local JSONL queue state.
 

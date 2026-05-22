@@ -13,8 +13,7 @@ URL. It does not open a browser or call Sci-Net.
 
 Observed outcomes:
 
-- Sci-Net may expose an open-access option.
-- Sci-Net may expose an existing availability option.
+- Sci-Net may expose open-access or Sci-Hub availability.
 - Sci-Net may allow a token-backed request when no paper is available.
 
 ## Requests

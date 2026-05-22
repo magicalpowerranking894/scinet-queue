@@ -7,7 +7,7 @@ assignees: ""
 ---
 
 Do not include credentials, cookies, tokens, browser profile data, private paper
-files, or reproduction details here.
+files, or sensitive reproduction details here.
 
 ## Contact request
 
