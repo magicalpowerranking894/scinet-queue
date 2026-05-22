@@ -89,9 +89,7 @@ pub(crate) fn parse_browsers(args: impl Iterator<Item = String>) -> Result<Brows
             "--pick" => set_browser_action(&mut action, BrowsersAction::Pick)?,
             "--clear" => set_browser_action(&mut action, BrowsersAction::Clear)?,
             "--set" => {
-                let Some(path) = args.next() else {
-                    return Err("browsers: missing value for --set".to_string());
-                };
+                let path = next_option_value(&mut args, "browsers", "--set")?;
 
                 set_browser_action(&mut action, BrowsersAction::Set(path.into()))?;
             }
@@ -129,9 +127,7 @@ pub(crate) fn parse_request(args: impl Iterator<Item = String>) -> Result<Reques
             "--budget-check" => budget_check = true,
             "--json" => json = true,
             "--reward" | "-r" => {
-                let Some(value) = args.next() else {
-                    return Err("request: missing value for --reward".to_string());
-                };
+                let value = next_option_value(&mut args, "request", "--reward")?;
 
                 reward = value
                     .parse()
@@ -265,9 +261,7 @@ pub(crate) fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArg
             "--wait" => wait = true,
             "--json" => json = true,
             "--poll" => {
-                let Some(value) = args.next() else {
-                    return Err("fetch: missing value for --poll".to_string());
-                };
+                let value = next_option_value(&mut args, "fetch", "--poll")?;
 
                 poll_secs = value
                     .parse()
@@ -278,9 +272,7 @@ pub(crate) fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArg
                 }
             }
             "--out" | "-o" => {
-                let Some(value) = args.next() else {
-                    return Err("fetch: missing value for --out".to_string());
-                };
+                let value = next_option_value(&mut args, "fetch", "--out")?;
 
                 out_dir = value.into();
             }
@@ -304,6 +296,22 @@ pub(crate) fn parse_fetch(args: impl Iterator<Item = String>) -> Result<FetchArg
         poll_secs,
         json,
     })
+}
+
+fn next_option_value(
+    args: &mut std::iter::Peekable<impl Iterator<Item = String>>,
+    command: &str,
+    option: &str,
+) -> Result<String, String> {
+    let Some(value) = args.next() else {
+        return Err(format!("{command}: missing value for {option}"));
+    };
+
+    if value.starts_with('-') {
+        return Err(format!("{command}: missing value for {option}"));
+    }
+
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -353,6 +361,7 @@ mod tests {
     #[test]
     fn browsers_rejects_ambiguous_or_non_scriptable_options() {
         assert!(parse_browsers(["--set"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_browsers(["--set", "--clear"].into_iter().map(str::to_string)).is_err());
         assert!(parse_browsers(["--set", "a", "--clear"].into_iter().map(str::to_string)).is_err());
         assert!(parse_browsers(["--pick", "--json"].into_iter().map(str::to_string)).is_err());
         assert!(parse_browsers(["--bad"].into_iter().map(str::to_string)).is_err());
@@ -410,6 +419,14 @@ mod tests {
         assert!(parse_request(std::iter::empty()).is_err());
         assert!(parse_request(["--all", "--reward", "0"].into_iter().map(str::to_string)).is_err());
         assert!(parse_request(["--all", "--reward"].into_iter().map(str::to_string)).is_err());
+        assert!(
+            parse_request(
+                ["--all", "--reward", "--json"]
+                    .into_iter()
+                    .map(str::to_string)
+            )
+            .is_err()
+        );
         assert!(parse_request(["--foo"].into_iter().map(str::to_string)).is_err());
         assert!(
             parse_request(
@@ -475,6 +492,7 @@ mod tests {
     #[test]
     fn out_dir_rejects_missing_and_unknown_values() {
         assert!(parse_fetch(["--out"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_fetch(["--out", "--json"].into_iter().map(str::to_string)).is_err());
         assert!(parse_fetch(["--bad"].into_iter().map(str::to_string)).is_err());
     }
 
@@ -495,6 +513,7 @@ mod tests {
     fn fetch_rejects_invalid_poll_interval() {
         assert!(parse_fetch(["--poll"].into_iter().map(str::to_string)).is_err());
         assert!(parse_fetch(["--poll", "0"].into_iter().map(str::to_string)).is_err());
+        assert!(parse_fetch(["--poll", "--json"].into_iter().map(str::to_string)).is_err());
         assert!(parse_fetch(["--poll", "soon"].into_iter().map(str::to_string)).is_err());
     }
 

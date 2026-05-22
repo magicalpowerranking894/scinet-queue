@@ -36,6 +36,14 @@ pub(crate) struct Browser {
 }
 
 impl Browser {
+    fn profile_name(&self) -> &'static str {
+        match self.engine {
+            BrowserEngine::Chromium => "chromium",
+            BrowserEngine::Firefox if is_zen_path(&self.path) => "zen",
+            BrowserEngine::Firefox => "firefox",
+        }
+    }
+
     pub(crate) fn launch_login(&self, profile_dir: &Path) -> Result<u32, BrowserError> {
         fs::create_dir_all(profile_dir)?;
 
@@ -288,15 +296,6 @@ pub(crate) enum BrowserEngine {
     Firefox,
 }
 
-impl BrowserEngine {
-    fn profile_name(self) -> &'static str {
-        match self {
-            BrowserEngine::Chromium => "chromium",
-            BrowserEngine::Firefox => "firefox",
-        }
-    }
-}
-
 impl fmt::Display for BrowserEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -436,12 +435,19 @@ impl From<serde_json::Error> for BrowserError {
     }
 }
 
-pub(crate) fn profile_dir(engine: BrowserEngine) -> Result<PathBuf, BrowserError> {
+pub(crate) fn profile_dir(browser: &Browser) -> Result<PathBuf, BrowserError> {
     let dirs = ProjectDirs::from("io.github", "tivris", "scinet-queue")
         .ok_or(BrowserError::NoProjectDirs)?;
     let state_dir = dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir());
 
-    Ok(state_dir.join("browser").join(engine.profile_name()))
+    Ok(state_dir.join("browser").join(browser.profile_name()))
+}
+
+fn is_zen_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().contains("zen"))
+        .unwrap_or(false)
 }
 
 fn wait_for_devtools_port(
@@ -697,6 +703,31 @@ mod tests {
         assert!(args.contains(&profile.display().to_string()));
         assert!(args.contains(&"--no-remote".to_string()));
         assert!(args.contains(&SCINET_URL.to_string()));
+    }
+
+    #[test]
+    fn firefox_family_profiles_are_browser_specific() {
+        let firefox = Browser {
+            engine: BrowserEngine::Firefox,
+            path: PathBuf::from("/Applications/Firefox.app/Contents/MacOS/firefox"),
+        };
+        let firefox_bin = Browser {
+            engine: BrowserEngine::Firefox,
+            path: PathBuf::from("/Applications/Firefox.app/Contents/MacOS/firefox-bin"),
+        };
+        let zen = Browser {
+            engine: BrowserEngine::Firefox,
+            path: PathBuf::from("/Applications/Zen Browser.app/Contents/MacOS/zen"),
+        };
+        let chromium = Browser {
+            engine: BrowserEngine::Chromium,
+            path: PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+        };
+
+        assert_eq!(firefox.profile_name(), "firefox");
+        assert_eq!(firefox_bin.profile_name(), "firefox");
+        assert_eq!(zen.profile_name(), "zen");
+        assert_eq!(chromium.profile_name(), "chromium");
     }
 
     #[test]

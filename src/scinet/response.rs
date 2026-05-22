@@ -229,7 +229,7 @@ fn collect_available_object_labels(
     let mut kinds = Vec::new();
 
     for (key, value) in map {
-        if let Some(kind) = availability_key(key) {
+        if let Some(kind) = availability_key(key).filter(|_| value_is_present(value)) {
             push_kind(&mut kinds, kind);
         }
 
@@ -603,6 +603,28 @@ mod tests {
             }),
         };
 
+        assert!(response.availability_links().is_empty());
+    }
+
+    #[test]
+    fn ignores_false_provider_availability_keys() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "providers": [
+                    {
+                        "name": "publisher",
+                        "available": true,
+                        "open_access": false,
+                        "sci_hub": false,
+                        "url": "https://publisher.example/landing"
+                    }
+                ]
+            }),
+        };
+
+        assert!(response.availability().is_empty());
         assert!(response.availability_links().is_empty());
     }
 

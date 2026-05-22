@@ -253,7 +253,7 @@ pub(crate) fn default_queue_path() -> PathBuf {
 }
 
 pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
-    let trimmed = raw.trim().trim_matches(['<', '>']);
+    let trimmed = trim_wrapped_doi(raw.trim());
     let lower = trimmed.to_ascii_lowercase();
     let (doi, from_url) = if lower.starts_with("doi:") {
         (&trimmed[4..], false)
@@ -274,15 +274,20 @@ pub(crate) fn normalize_doi(raw: &str) -> Result<String, QueueError> {
     } else {
         doi
     };
-    let doi = doi
-        .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
-        .to_ascii_lowercase();
+    let doi = doi.to_ascii_lowercase();
 
     if is_valid_doi(&doi) {
         Ok(doi)
     } else {
         Err(QueueError::InvalidDoi(raw.trim().to_string()))
     }
+}
+
+fn trim_wrapped_doi(value: &str) -> &str {
+    value
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+        .unwrap_or(value)
 }
 
 fn is_valid_doi(doi: &str) -> bool {
@@ -451,7 +456,7 @@ mod tests {
         );
         assert_eq!(
             normalize_doi("doi:10.1000/snq-alt.").unwrap(),
-            "10.1000/snq-alt"
+            "10.1000/snq-alt."
         );
         assert_eq!(
             normalize_doi("<https://doi.org/10.1000/SNQ-EXAMPLE>").unwrap(),
@@ -460,6 +465,14 @@ mod tests {
         assert_eq!(
             normalize_doi("https://dx.doi.org/10.1000/ABC?utm_source=x").unwrap(),
             "10.1000/abc"
+        );
+        assert_eq!(
+            normalize_doi("10.1000/snq-example(1)").unwrap(),
+            "10.1000/snq-example(1)"
+        );
+        assert_eq!(
+            normalize_doi("10.1000/snq-example>").unwrap(),
+            "10.1000/snq-example>"
         );
     }
 

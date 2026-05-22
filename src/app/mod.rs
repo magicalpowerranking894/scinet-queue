@@ -130,7 +130,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         Some("login") => {
             let login = parse_login(args)?;
             let browser = detect_browser_or_prompt(true)?;
-            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+            let profile_dir = profile_dir(&browser).map_err(|error| error.to_string())?;
 
             if login.wait {
                 let mut session_browser = browser
@@ -166,7 +166,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         Some("session") => {
             let json = parse_json_flag("session", args)?;
             let browser = detect_browser_or_prompt(!json)?;
-            let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+            let profile_dir = profile_dir(&browser).map_err(|error| error.to_string())?;
             let session_browser = browser
                 .launch_session(&profile_dir, true)
                 .map_err(|error| error.to_string())?;
@@ -576,7 +576,7 @@ where
     F: FnOnce(&mut BrowserPageSession) -> Result<T, String>,
 {
     let browser = detect_browser_or_prompt(interactive)?;
-    let profile_dir = profile_dir(browser.engine).map_err(|error| error.to_string())?;
+    let profile_dir = profile_dir(&browser).map_err(|error| error.to_string())?;
     let session_browser = browser
         .launch_session(&profile_dir, true)
         .map_err(|error| error.to_string())?;

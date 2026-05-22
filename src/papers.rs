@@ -32,7 +32,7 @@ pub(crate) fn extract_dois(text: &str) -> Vec<String> {
             .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\''))
             .next()
             .unwrap_or_default()
-            .trim_end_matches(['.', ',', ';', ':', ')', ']', '}']);
+            .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>']);
 
         if is_doi_url_context(text, start) {
             raw = raw.split(['?', '#']).next().unwrap_or_default();
@@ -154,6 +154,14 @@ pub(crate) fn update_status_from_remote(
     doi: &str,
     remote_state: RequestRemoteState,
 ) -> Result<QueueStatus, String> {
+    if remote_state == RequestRemoteState::Pending && status == QueueStatus::Queued {
+        queue
+            .set_status(doi, QueueStatus::Requested)
+            .map_err(|error| error.to_string())?;
+
+        return Ok(QueueStatus::Requested);
+    }
+
     if remote_state == RequestRemoteState::Working
         && matches!(status, QueueStatus::Queued | QueueStatus::Requested)
     {
@@ -467,6 +475,28 @@ mod tests {
 
         assert_eq!(status, QueueStatus::Fetched);
         assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Fetched);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remote_pending_state_promotes_queued_entries_to_requested() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-fetch-pending-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+
+        queue.add("10.1000/snq-example").unwrap();
+        let status = update_status_from_remote(
+            &queue,
+            QueueStatus::Queued,
+            "10.1000/snq-example",
+            RequestRemoteState::Pending,
+        )
+        .unwrap();
+
+        assert_eq!(status, QueueStatus::Requested);
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Requested);
 
         let _ = fs::remove_dir_all(dir);
     }

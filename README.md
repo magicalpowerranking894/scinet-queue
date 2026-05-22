@@ -105,13 +105,13 @@ Shells such as zsh treat some DOI characters, including parentheses, as glob
 syntax. Quote DOIs with shell metacharacters:
 
 ```sh
-snq check '10.1000/snq-example(1)'
+snq check '10.1016/s0272-5231(21)01013-3'
 ```
 
 Request one queued paper, or request all queued papers:
 
 ```sh
-snq request '10.1000/snq-example(1)' --reward 1
+snq request '10.1016/s0272-5231(21)01013-3' --reward 1
 snq request --all --reward 1
 ```
 
@@ -141,7 +141,7 @@ snq view 10.1000/snq-example
 Print the Sci-Net request URL for a DOI without opening a browser:
 
 ```sh
-snq url '10.1000/snq-example(1)'
+snq url '10.1016/s0272-5231(21)01013-3'
 ```
 
 Download one available PDF, or fetch available PDFs for queued, requested, and

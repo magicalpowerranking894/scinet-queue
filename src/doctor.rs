@@ -92,7 +92,7 @@ pub(crate) fn doctor_report(queue: &Queue) -> DoctorReport {
     };
 
     let (profile_info, session_info) = match browser_result {
-        Ok(browser) => match profile_dir(browser.engine) {
+        Ok(browser) => match profile_dir(&browser) {
             Ok(path) => {
                 let profile_info = DoctorProfile {
                     ok: true,

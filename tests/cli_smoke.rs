@@ -121,6 +121,25 @@ fn url_prints_scinet_request_url_without_browser() {
 }
 
 #[test]
+fn url_preserves_trailing_parenthesis_in_quoted_doi() {
+    let dir = temp_workspace("url-parenthesis");
+
+    let output = snq()
+        .current_dir(&dir)
+        .args(["url", "10.1000/snq-example(1)"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "https://sci-net.xyz/10.1000/snq-example%281%29\n"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn request_all_json_prints_empty_array_for_empty_queue() {
     let dir = temp_workspace("request-empty-json");
 
@@ -443,6 +462,33 @@ fn json_errors_are_machine_readable() {
     );
 
     fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn parser_json_errors_are_machine_readable() {
+    let dir = temp_workspace("json-parse-errors");
+
+    let cases = [
+        vec!["request", "--all", "--reward", "0", "--json"],
+        vec!["fetch", "--poll", "0", "--json"],
+        vec!["view", "--bad", "--json"],
+    ];
+
+    for args in cases {
+        let output = snq().current_dir(&dir).args(args).output().unwrap();
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+
+        let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert!(
+            value["error"]
+                .as_str()
+                .is_some_and(|error| !error.is_empty())
+        );
+    }
+
     fs::remove_dir_all(dir).unwrap();
 }
 
