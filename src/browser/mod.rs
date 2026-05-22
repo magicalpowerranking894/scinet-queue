@@ -498,30 +498,33 @@ fn ensure_native_profile_unlocked(profile_dir: &Path) -> Result<(), BrowserError
     Ok(())
 }
 
+#[cfg(unix)]
 fn cleanup_stale_native_profile_locks(profile_dir: &Path) -> Result<(), BrowserError> {
-    #[cfg(unix)]
-    {
-        let lock_path = profile_dir.join("SingletonLock");
+    let lock_path = profile_dir.join("SingletonLock");
 
-        if let Some(pid) = native_lock_pid(&lock_path) {
-            if !process_exists(pid) {
-                for lock_name in [
-                    "SingletonLock",
-                    "SingletonSocket",
-                    "SingletonCookie",
-                    "DevToolsActivePort",
-                ] {
-                    let path = profile_dir.join(lock_name);
-                    match fs::remove_file(&path) {
-                        Ok(()) => {}
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => return Err(BrowserError::Io(error)),
-                    }
+    if let Some(pid) = native_lock_pid(&lock_path) {
+        if !process_exists(pid) {
+            for lock_name in [
+                "SingletonLock",
+                "SingletonSocket",
+                "SingletonCookie",
+                "DevToolsActivePort",
+            ] {
+                let path = profile_dir.join(lock_name);
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(BrowserError::Io(error)),
                 }
             }
         }
     }
 
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn cleanup_stale_native_profile_locks(_profile_dir: &Path) -> Result<(), BrowserError> {
     Ok(())
 }
 
