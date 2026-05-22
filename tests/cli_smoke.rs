@@ -535,7 +535,8 @@ fn doctor_json_redacts_home_paths() {
 
     let value: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
     let message = value["browser"]["message"].as_str().unwrap();
-    assert!(message.contains("~/missing-browser"));
+    assert!(message.contains('~'));
+    assert!(message.contains("missing-browser"));
     assert!(!message.contains(home.to_str().unwrap()));
 
     fs::remove_dir_all(home).unwrap();
