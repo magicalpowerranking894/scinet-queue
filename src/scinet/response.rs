@@ -372,10 +372,8 @@ fn value_urls(value: &Value) -> Vec<&str> {
 
 fn collect_value_urls<'a>(value: &'a Value, urls: &mut Vec<&'a str>) {
     match value {
-        Value::String(text) => {
-            if is_url(text) {
-                urls.push(text);
-            }
+        Value::String(text) if is_url(text) => {
+            urls.push(text);
         }
         Value::Array(values) => {
             for value in values {
