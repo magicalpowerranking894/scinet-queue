@@ -9,6 +9,9 @@ const RESPONSE_REASON_KEYS: &[&str] = &[
     "detail",
     "details",
     "description",
+    "notFound",
+    "not_found",
+    "crossref",
     "text",
 ];
 
@@ -64,6 +67,8 @@ impl ScinetResponse {
             || text.contains("error")
             || text.contains("failed")
             || text.contains("invalid")
+            || text.contains("not found")
+            || text.contains("crossref")
         {
             if let Some(reason) = compact_reason(raw_text) {
                 return Some(format!("response body looked like an error: {reason}"));
@@ -388,14 +393,20 @@ fn collect_value_urls<'a>(value: &'a Value, urls: &mut Vec<&'a str>) {
 
 fn is_url(value: &str) -> bool {
     let value = value.trim();
-    value.starts_with("https://") || value.starts_with("http://")
+    value.starts_with("https://") || value.starts_with("http://") || value.starts_with("//")
 }
 
 fn clean_url(value: &str) -> String {
-    value
+    let value = value
         .trim()
         .trim_matches(|ch| matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | ',' | ';'))
-        .to_string()
+        .to_string();
+
+    if value.starts_with("//") {
+        format!("https:{value}")
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]
@@ -451,6 +462,35 @@ mod tests {
 
         let error = response.logical_error().unwrap();
         assert!(error.contains("error`=true"));
+    }
+
+    #[test]
+    fn reports_crossref_not_found_error_reason() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "error": true,
+                "crossref": "DOI was not found in Crossref"
+            }),
+        };
+
+        let error = response.logical_error().unwrap();
+        assert!(error.contains("DOI was not found in Crossref"));
+    }
+
+    #[test]
+    fn reports_plain_text_not_found_error() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "text": "DOI not found by Crossref. Check the DOI and try again."
+            }),
+        };
+
+        let error = response.logical_error().unwrap();
+        assert!(error.contains("DOI not found by Crossref"));
     }
 
     #[test]
@@ -525,6 +565,25 @@ mod tests {
                     url: "https://open.example/paper.pdf".to_string(),
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn normalizes_protocol_relative_availability_links() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "sci-hub": "//sci-hub.example/10.1000/snq-example"
+            }),
+        };
+
+        assert_eq!(
+            response.availability_links(),
+            vec![ScinetAvailabilityLink {
+                source: ScinetAvailability::SciHub,
+                url: "https://sci-hub.example/10.1000/snq-example".to_string(),
+            }]
         );
     }
 

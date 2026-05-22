@@ -14,6 +14,10 @@
   stop conditions.
 - Added `snq url <doi>` for printing a Sci-Net request URL without opening a
   browser.
+- Downloaded large request-page PDFs from the managed browser in bounded chunks
+  to avoid browser protocol message limits.
+- Surfaced Sci-Net/Crossref not-found reasons when response bodies include
+  them.
 - Synced local queue state when Sci-Net rejects a request for a DOI whose
   request page already exists remotely.
 - Closed waited `snq login` browser sessions gracefully after login detection so

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::page::{PageError, PageSession};
 
 pub(crate) const SCINET_URL: &str = "https://sci-net.xyz/";
+const DOWNLOAD_CHUNK_SIZE: usize = 512 * 1024;
 
 mod response;
 
@@ -235,22 +236,26 @@ pub(crate) fn download_pdf(
     let value = page.evaluate_json(&format!(
         r#"(async () => {{
             const response = await fetch({pdf_url}, {{ credentials: 'include' }});
-            const bytes = new Uint8Array(await response.arrayBuffer());
-            let binary = '';
-            const chunk = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunk) {{
-                binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+            if (!response.ok) {{
+                return {{
+                    ok: false,
+                    status: response.status,
+                    content_type: response.headers.get('content-type'),
+                    length: 0
+                }};
             }}
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            window.__snqDownloadBytes = bytes;
             return {{
-                ok: response.ok,
+                ok: true,
                 status: response.status,
                 content_type: response.headers.get('content-type'),
-                body: btoa(binary)
+                length: bytes.length
             }};
         }})()"#
     ))?;
 
-    let response: DownloadResponse = serde_json::from_value(value)?;
+    let response: DownloadStartResponse = serde_json::from_value(value)?;
 
     if !response.ok {
         return Err(PageError::UnexpectedResponse(json!({
@@ -259,8 +264,32 @@ pub(crate) fn download_pdf(
         })));
     }
 
+    let mut bytes = Vec::with_capacity(response.length);
+
+    for offset in (0..response.length).step_by(DOWNLOAD_CHUNK_SIZE) {
+        let value = page.evaluate_json(&format!(
+            r#"(() => {{
+                const bytes = window.__snqDownloadBytes;
+                if (!bytes) {{
+                    throw new Error('missing snq download buffer');
+                }}
+                const slice = bytes.subarray({offset}, {offset} + {DOWNLOAD_CHUNK_SIZE});
+                let binary = '';
+                const chunk = 0x8000;
+                for (let i = 0; i < slice.length; i += chunk) {{
+                    binary += String.fromCharCode(...slice.subarray(i, i + chunk));
+                }}
+                return btoa(binary);
+            }})()"#
+        ))?;
+        let chunk: String = serde_json::from_value(value)?;
+        bytes.extend(BASE64.decode(chunk)?);
+    }
+
+    let _ = page.evaluate_json("(() => { delete window.__snqDownloadBytes; return true; })()");
+
     Ok(PdfDownload {
-        bytes: BASE64.decode(response.body)?,
+        bytes,
         content_type: response.content_type,
     })
 }
@@ -321,11 +350,11 @@ fn doi_path(doi: &str) -> String {
 }
 
 #[derive(Debug, Deserialize)]
-struct DownloadResponse {
+struct DownloadStartResponse {
     ok: bool,
     status: u16,
     content_type: Option<String>,
-    body: String,
+    length: usize,
 }
 
 #[cfg(test)]
