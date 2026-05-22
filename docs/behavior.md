@@ -30,6 +30,16 @@ Observed request page states:
 - `pdf`: a PDF link is visible on the request page.
 - `logged-out`: the session is no longer authenticated.
 
+Local queue states:
+
+| State | Meaning | Typical movement |
+| --- | --- | --- |
+| `queued` | DOI is known locally but no request has been confirmed. | `add`, `import`, or direct `fetch <doi>` setup |
+| `requested` | Sci-Net accepted or already has a visible pending request. | `request` |
+| `working` | Sci-Net reports someone is working on the request. | `watch`, `view`, or `fetch` sync from remote state |
+| `fetched` | A request-page PDF was downloaded and validated locally. | `fetch` |
+| `approved` | The local operator marked the fetched PDF as reviewed. | `approve` |
+
 ## Fetch And Approval
 
 `snq watch` checks requested and working queue entries. It skips queued,
@@ -38,10 +48,11 @@ not start a browser session.
 
 `snq fetch` downloads the first detected PDF link with the managed session and
 marks the queue entry `fetched` after validating the file header. With
-`--wait`, batch fetches keep polling until every targeted DOI has been fetched
-or Sci-Net reports another availability path.
+`--wait`, batch fetches keep polling until every targeted DOI has either been
+fetched or reached another Sci-Net-visible availability path.
 When no request-page PDF is visible, `fetch` also checks Sci-Net search
 availability and reports `open-access` and `sci-hub` hints where Sci-Net exposes
+them. JSON output also includes resolved provider URLs when Sci-Net exposes
 them. It does not independently search or download from publishers,
 repositories, or Sci-Hub.
 

@@ -38,6 +38,12 @@ pub(crate) enum ScinetAvailability {
     SciHub,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ScinetAvailabilityLink {
+    pub(crate) source: ScinetAvailability,
+    pub(crate) url: String,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum RequestRemoteState {

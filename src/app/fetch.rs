@@ -5,7 +5,7 @@ use crate::args::FetchArgs;
 use crate::output::{FetchOutput, FetchOutputStatus, print_json};
 use crate::papers::{FetchResult, fetch_dois, fetch_one};
 use crate::queue::Queue;
-use crate::scinet::{RequestRemoteState, ScinetAvailability};
+use crate::scinet::{RequestRemoteState, ScinetAvailability, ScinetAvailabilityLink};
 
 pub(super) fn handle_fetch(queue: &Queue, fetch: FetchArgs) -> Result<(), String> {
     let dois = fetch_dois(queue, fetch.doi.as_deref())?;
@@ -76,11 +76,13 @@ where
                     status: FetchOutputStatus::Fetched,
                     remote_state: RequestRemoteState::Pdf,
                     availability: Vec::new(),
+                    availability_links: Vec::new(),
                     path: Some(path.display().to_string()),
                 }),
                 FetchResult::NoPdf {
                     remote_state,
                     availability,
+                    availability_links,
                 } => {
                     if wait && availability.is_empty() {
                         next_pending.push(doi);
@@ -90,6 +92,7 @@ where
                             status: FetchOutputStatus::NoPdf,
                             remote_state,
                             availability,
+                            availability_links,
                             path: None,
                         });
                     }
@@ -113,10 +116,11 @@ fn fetch_text_line(output: &FetchOutput) -> String {
             format!("no-pdf\t{}\t{}", output.remote_state.as_str(), output.doi)
         }
         None => format!(
-            "no-pdf\t{}\t{}\tavailability={}",
+            "no-pdf\t{}\t{}\tavailability={}{}",
             output.remote_state.as_str(),
             output.doi,
-            format_availability(&output.availability)
+            format_availability(&output.availability),
+            format_availability_links_suffix(&output.availability_links)
         ),
     }
 }
@@ -127,6 +131,21 @@ fn format_availability(availability: &[ScinetAvailability]) -> String {
         .map(|availability| availability.as_str())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_availability_links_suffix(links: &[ScinetAvailabilityLink]) -> String {
+    if links.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "\tavailability_links={}",
+        links
+            .iter()
+            .map(|link| format!("{}:{}", link.source.as_str(), link.url))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 #[cfg(test)]
@@ -150,6 +169,7 @@ mod tests {
                     (2, "10.1000/two") => Ok(FetchResult::NoPdf {
                         remote_state: RequestRemoteState::Working,
                         availability: Vec::new(),
+                        availability_links: Vec::new(),
                     }),
                     (3, "10.1000/two") => Ok(FetchResult::Fetched("papers/two.pdf".into())),
                     _ => panic!("unexpected fetch call sequence: {calls:?}"),
@@ -191,10 +211,12 @@ mod tests {
                     (1, "10.1000/open") => Ok(FetchResult::NoPdf {
                         remote_state: RequestRemoteState::Pending,
                         availability: vec![ScinetAvailability::OpenAccess],
+                        availability_links: Vec::new(),
                     }),
                     (2, "10.1000/pending") => Ok(FetchResult::NoPdf {
                         remote_state: RequestRemoteState::Pending,
                         availability: Vec::new(),
+                        availability_links: Vec::new(),
                     }),
                     (3, "10.1000/pending") => Ok(FetchResult::Fetched("papers/pending.pdf".into())),
                     _ => panic!("unexpected fetch call sequence: {calls:?}"),
@@ -234,6 +256,10 @@ mod tests {
                 Ok(FetchResult::NoPdf {
                     remote_state: RequestRemoteState::Pending,
                     availability: vec![ScinetAvailability::SciHub],
+                    availability_links: vec![ScinetAvailabilityLink {
+                        source: ScinetAvailability::SciHub,
+                        url: "https://sci-hub.example/10.1000/one".to_string(),
+                    }],
                 })
             },
             |_| panic!("non-waiting fetch should not sleep"),
@@ -245,6 +271,13 @@ mod tests {
         assert!(matches!(outputs[0].status, FetchOutputStatus::NoPdf));
         assert_eq!(outputs[0].remote_state, RequestRemoteState::Pending);
         assert_eq!(outputs[0].availability, vec![ScinetAvailability::SciHub]);
+        assert_eq!(
+            outputs[0].availability_links,
+            vec![ScinetAvailabilityLink {
+                source: ScinetAvailability::SciHub,
+                url: "https://sci-hub.example/10.1000/one".to_string(),
+            }]
+        );
         assert!(outputs[0].path.is_none());
     }
 
@@ -256,6 +289,7 @@ mod tests {
                 status: FetchOutputStatus::Fetched,
                 remote_state: RequestRemoteState::Pdf,
                 availability: Vec::new(),
+                availability_links: Vec::new(),
                 path: Some("papers/one.pdf".to_string()),
             },
             FetchOutput {
@@ -263,6 +297,10 @@ mod tests {
                 status: FetchOutputStatus::NoPdf,
                 remote_state: RequestRemoteState::Working,
                 availability: vec![ScinetAvailability::OpenAccess, ScinetAvailability::SciHub],
+                availability_links: vec![ScinetAvailabilityLink {
+                    source: ScinetAvailability::SciHub,
+                    url: "https://sci-hub.example/10.1000/two".to_string(),
+                }],
                 path: None,
             },
         ];
@@ -272,7 +310,7 @@ mod tests {
             lines,
             vec![
                 "papers/one.pdf".to_string(),
-                "no-pdf\tworking\t10.1000/two\tavailability=open-access,sci-hub".to_string()
+                "no-pdf\tworking\t10.1000/two\tavailability=open-access,sci-hub\tavailability_links=sci-hub:https://sci-hub.example/10.1000/two".to_string()
             ]
         );
     }

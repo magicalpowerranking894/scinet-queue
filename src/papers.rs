@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::page::PageSession;
 use crate::queue::{Queue, QueueStatus, StatusResult, normalize_doi};
 use crate::scinet::{
-    RequestRemoteState, SCINET_URL, ScinetAvailability, download_pdf, search_doi, view_request,
+    RequestRemoteState, SCINET_URL, ScinetAvailability, ScinetAvailabilityLink, download_pdf,
+    search_doi, view_request,
 };
 
 pub(crate) fn read_import_text(path: &str) -> Result<String, String> {
@@ -121,7 +122,8 @@ pub(crate) fn fetch_one(
         let availability = scinet_availability(page, doi);
         return Ok(FetchResult::NoPdf {
             remote_state,
-            availability,
+            availability: availability.kinds,
+            availability_links: availability.links,
         });
     };
     let download = download_pdf(page, pdf_url).map_err(|error| error.to_string())?;
@@ -142,6 +144,7 @@ pub(crate) enum FetchResult {
     NoPdf {
         remote_state: RequestRemoteState,
         availability: Vec<ScinetAvailability>,
+        availability_links: Vec<ScinetAvailabilityLink>,
     },
 }
 
@@ -173,10 +176,23 @@ fn queue_status(queue: &Queue, doi: &str) -> Result<Option<QueueStatus>, String>
         .map(|entry| entry.status))
 }
 
-fn scinet_availability(page: &mut impl PageSession, doi: &str) -> Vec<ScinetAvailability> {
-    search_doi(page, SCINET_URL, doi)
-        .map(|response| response.availability())
-        .unwrap_or_default()
+struct ScinetAvailabilityResult {
+    kinds: Vec<ScinetAvailability>,
+    links: Vec<ScinetAvailabilityLink>,
+}
+
+fn scinet_availability(page: &mut impl PageSession, doi: &str) -> ScinetAvailabilityResult {
+    let Ok(response) = search_doi(page, SCINET_URL, doi) else {
+        return ScinetAvailabilityResult {
+            kinds: Vec::new(),
+            links: Vec::new(),
+        };
+    };
+
+    ScinetAvailabilityResult {
+        kinds: response.availability(),
+        links: response.availability_links(),
+    }
 }
 
 fn mark_fetched(queue: &Queue, doi: &str) -> Result<(), String> {
@@ -393,9 +409,17 @@ mod tests {
             FetchResult::NoPdf {
                 remote_state,
                 availability,
+                availability_links,
             } => {
                 assert_eq!(remote_state, RequestRemoteState::Working);
                 assert_eq!(availability, vec![ScinetAvailability::OpenAccess]);
+                assert_eq!(
+                    availability_links,
+                    vec![ScinetAvailabilityLink {
+                        source: ScinetAvailability::OpenAccess,
+                        url: "https://example.test/open.pdf".to_string(),
+                    }]
+                );
             }
             FetchResult::Fetched(_) => panic!("expected no PDF"),
         }
@@ -457,7 +481,7 @@ mod tests {
                     "ok": true,
                     "status": 200,
                     "body": {
-                        "open_access": true
+                        "open_access": "https://example.test/open.pdf"
                     }
                 }))
             }

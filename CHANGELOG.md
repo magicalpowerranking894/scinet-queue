@@ -8,6 +8,10 @@
 - Split Sci-Net response parsing from page-session request code.
 - Rejected non-executable browser paths before saving or launching browser
   preferences.
+- Surfaced Sci-Net-provided open-access and Sci-Hub provider URLs in fetch JSON
+  output.
+- Documented local and remote queue state movement and clearer `fetch --wait`
+  stop conditions.
 - Synced local queue state when Sci-Net rejects a request for a DOI whose
   request page already exists remotely.
 - Closed waited `snq login` browser sessions gracefully after login detection so

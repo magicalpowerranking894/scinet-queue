@@ -140,10 +140,12 @@ snq fetch --out papers
 When Sci-Net reports open-access or Sci-Hub availability but no request-page PDF
 is downloadable yet, `snq fetch` reports that availability instead of treating
 the DOI as simply pending. `snq` does not download from publisher pages,
-open-access repositories, or Sci-Hub itself.
+open-access repositories, or Sci-Hub itself. In JSON output, resolved provider
+URLs are included when Sci-Net exposes them.
 
-Keep polling until every targeted DOI has a downloadable request-page PDF or a
-Sci-Net availability hint:
+Keep polling until every targeted DOI reaches an actionable outcome: a
+downloadable request-page PDF, or a Sci-Net availability hint such as
+open-access or Sci-Hub:
 
 ```sh
 snq fetch --wait --poll 30 --out papers
@@ -211,6 +213,12 @@ Example `snq fetch --json` output:
     "status": "no-pdf",
     "remote_state": "working",
     "availability": ["open-access", "sci-hub"],
+    "availability_links": [
+      {
+        "source": "sci-hub",
+        "url": "https://sci-hub.example/10.1000/snq-example"
+      }
+    ],
     "path": null
   }
 ]

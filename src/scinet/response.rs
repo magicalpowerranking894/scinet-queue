@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{ScinetAvailability, ScinetResponse, looks_like_login_text};
+use super::{ScinetAvailability, ScinetAvailabilityLink, ScinetResponse, looks_like_login_text};
 
 const RESPONSE_REASON_KEYS: &[&str] = &[
     "message",
@@ -80,10 +80,26 @@ impl ScinetResponse {
             return Vec::new();
         }
 
-        let mut availability = Vec::new();
-        collect_availability(None, &self.body, &mut availability);
-        availability
+        let mut info = AvailabilityInfo::default();
+        collect_availability(None, &self.body, &mut info);
+        info.kinds
     }
+
+    pub(crate) fn availability_links(&self) -> Vec<ScinetAvailabilityLink> {
+        if !self.ok || self.status >= 400 || self.logical_error().is_some() {
+            return Vec::new();
+        }
+
+        let mut info = AvailabilityInfo::default();
+        collect_availability(None, &self.body, &mut info);
+        info.links
+    }
+}
+
+#[derive(Default)]
+struct AvailabilityInfo {
+    kinds: Vec<ScinetAvailability>,
+    links: Vec<ScinetAvailabilityLink>,
 }
 
 fn response_reason(body: &Value) -> Option<String> {
@@ -163,40 +179,39 @@ fn error_value_is_present(value: &Value) -> bool {
     }
 }
 
-fn collect_availability(
-    key: Option<&str>,
-    value: &Value,
-    availability: &mut Vec<ScinetAvailability>,
-) {
-    if let Some(kind) = key
-        .and_then(availability_key)
-        .filter(|_| value_is_present(value))
-    {
-        push_availability(availability, kind);
+fn collect_availability(key: Option<&str>, value: &Value, info: &mut AvailabilityInfo) {
+    if let Some(kind) = key.and_then(availability_key) {
+        if value_is_present(value) {
+            push_availability(info, kind);
+        }
+
+        for url in value_urls(value) {
+            push_availability_link(info, kind, url);
+        }
     }
 
     match value {
         Value::Object(map) => {
             if map.get("available").is_some_and(value_is_present) {
-                collect_available_object_labels(map, availability);
+                collect_available_object_labels(map, info);
             }
 
             for (key, value) in map {
-                collect_availability(Some(key), value, availability);
+                collect_availability(Some(key), value, info);
             }
         }
         Value::Array(values) => {
             for value in values {
-                collect_availability(None, value, availability);
+                collect_availability(None, value, info);
             }
         }
         Value::Bool(true) => {
             if let Some(key) = key {
-                collect_availability_text(key, availability);
+                collect_availability_text(key, info);
             }
         }
         Value::String(text) => {
-            collect_availability_text(text, availability);
+            collect_availability_text(text, info);
         }
         _ => {}
     }
@@ -204,28 +219,40 @@ fn collect_availability(
 
 fn collect_available_object_labels(
     map: &serde_json::Map<String, Value>,
-    availability: &mut Vec<ScinetAvailability>,
+    info: &mut AvailabilityInfo,
 ) {
+    let mut kinds = Vec::new();
+
     for (key, value) in map {
         if let Some(kind) = availability_key(key) {
-            push_availability(availability, kind);
+            push_kind(&mut kinds, kind);
         }
 
         if let Value::String(text) = value {
-            collect_provider_label(text, availability);
+            collect_provider_label(text, &mut kinds);
+        }
+    }
+
+    for kind in &kinds {
+        push_availability(info, *kind);
+    }
+
+    for kind in kinds {
+        for url in object_urls(map) {
+            push_availability_link(info, kind, url);
         }
     }
 }
 
-fn collect_provider_label(text: &str, availability: &mut Vec<ScinetAvailability>) {
+fn collect_provider_label(text: &str, kinds: &mut Vec<ScinetAvailability>) {
     let text = text.to_ascii_lowercase();
 
     if text.contains("open access") || text.contains("open-access") || text.contains("openaccess") {
-        push_availability(availability, ScinetAvailability::OpenAccess);
+        push_kind(kinds, ScinetAvailability::OpenAccess);
     }
 
     if text.contains("sci-hub") || text.contains("scihub") || text.contains("sci_hub") {
-        push_availability(availability, ScinetAvailability::SciHub);
+        push_kind(kinds, ScinetAvailability::SciHub);
     }
 }
 
@@ -264,13 +291,35 @@ fn value_is_present(value: &Value) -> bool {
     }
 }
 
-fn push_availability(availability: &mut Vec<ScinetAvailability>, kind: ScinetAvailability) {
-    if !availability.contains(&kind) {
-        availability.push(kind);
+fn push_availability(info: &mut AvailabilityInfo, kind: ScinetAvailability) {
+    push_kind(&mut info.kinds, kind);
+}
+
+fn push_kind(kinds: &mut Vec<ScinetAvailability>, kind: ScinetAvailability) {
+    if !kinds.contains(&kind) {
+        kinds.push(kind);
     }
 }
 
-fn collect_availability_text(text: &str, availability: &mut Vec<ScinetAvailability>) {
+fn push_availability_link(info: &mut AvailabilityInfo, source: ScinetAvailability, url: &str) {
+    push_availability(info, source);
+
+    let url = clean_url(url);
+
+    if url.is_empty() {
+        return;
+    }
+
+    if !info
+        .links
+        .iter()
+        .any(|link| link.source == source && link.url == url)
+    {
+        info.links.push(ScinetAvailabilityLink { source, url });
+    }
+}
+
+fn collect_availability_text(text: &str, info: &mut AvailabilityInfo) {
     let text = text.to_ascii_lowercase();
 
     if (text.contains("open access")
@@ -286,9 +335,8 @@ fn collect_availability_text(text: &str, availability: &mut Vec<ScinetAvailabili
         && !text.contains("open-access not")
         && !text.contains("openaccess not")
         && !text.contains("open_access not")
-        && !availability.contains(&ScinetAvailability::OpenAccess)
     {
-        push_availability(availability, ScinetAvailability::OpenAccess);
+        push_availability(info, ScinetAvailability::OpenAccess);
     }
 
     if (text.contains("sci-hub") || text.contains("scihub") || text.contains("sci_hub"))
@@ -302,10 +350,52 @@ fn collect_availability_text(text: &str, availability: &mut Vec<ScinetAvailabili
         && !text.contains("sci-hub not")
         && !text.contains("scihub not")
         && !text.contains("sci_hub not")
-        && !availability.contains(&ScinetAvailability::SciHub)
     {
-        push_availability(availability, ScinetAvailability::SciHub);
+        push_availability(info, ScinetAvailability::SciHub);
     }
+}
+
+fn object_urls(map: &serde_json::Map<String, Value>) -> Vec<&str> {
+    map.values().flat_map(value_urls).collect()
+}
+
+fn value_urls(value: &Value) -> Vec<&str> {
+    let mut urls = Vec::new();
+    collect_value_urls(value, &mut urls);
+    urls
+}
+
+fn collect_value_urls<'a>(value: &'a Value, urls: &mut Vec<&'a str>) {
+    match value {
+        Value::String(text) => {
+            if is_url(text) {
+                urls.push(text);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_value_urls(value, urls);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                collect_value_urls(value, urls);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_url(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+fn clean_url(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch| matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | ',' | ';'))
+        .to_string()
 }
 
 #[cfg(test)]
@@ -393,6 +483,96 @@ mod tests {
             response.availability(),
             vec![ScinetAvailability::OpenAccess, ScinetAvailability::SciHub]
         );
+        assert_eq!(
+            response.availability_links(),
+            vec![ScinetAvailabilityLink {
+                source: ScinetAvailability::OpenAccess,
+                url: "https://ojs.aaai.org/index.php/AAAI/article/download/33658/35813".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn detects_availability_links_from_provider_objects() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "providers": [
+                    {
+                        "name": "Sci-Hub",
+                        "available": true,
+                        "url": "https://sci-hub.example/10.1000/snq-example"
+                    },
+                    {
+                        "label": "Open Access",
+                        "available": true,
+                        "href": "https://open.example/paper.pdf"
+                    }
+                ]
+            }),
+        };
+
+        assert_eq!(
+            response.availability_links(),
+            vec![
+                ScinetAvailabilityLink {
+                    source: ScinetAvailability::SciHub,
+                    url: "https://sci-hub.example/10.1000/snq-example".to_string(),
+                },
+                ScinetAvailabilityLink {
+                    source: ScinetAvailability::OpenAccess,
+                    url: "https://open.example/paper.pdf".to_string(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_urls_in_availability_links() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "publisher": "https://publisher.example/paper",
+                "open_access": false,
+                "providers": [
+                    {
+                        "name": "publisher",
+                        "available": true,
+                        "url": "https://publisher.example/landing"
+                    }
+                ]
+            }),
+        };
+
+        assert!(response.availability_links().is_empty());
+    }
+
+    #[test]
+    fn deduplicates_availability_links() {
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: json!({
+                "sci_hub": "https://sci-hub.example/10.1000/snq-example",
+                "providers": [
+                    {
+                        "name": "Sci-Hub",
+                        "available": true,
+                        "url": "https://sci-hub.example/10.1000/snq-example"
+                    }
+                ]
+            }),
+        };
+
+        assert_eq!(
+            response.availability_links(),
+            vec![ScinetAvailabilityLink {
+                source: ScinetAvailability::SciHub,
+                url: "https://sci-hub.example/10.1000/snq-example".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -438,5 +618,6 @@ mod tests {
         };
 
         assert!(response.availability().is_empty());
+        assert!(response.availability_links().is_empty());
     }
 }
