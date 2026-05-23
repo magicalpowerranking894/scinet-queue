@@ -84,7 +84,7 @@ where
                     availability,
                     availability_links,
                 } => {
-                    if wait && availability.is_empty() {
+                    if should_keep_waiting(wait, remote_state, &availability) {
                         next_pending.push(doi);
                     } else {
                         outputs.push(FetchOutput {
@@ -107,6 +107,18 @@ where
         wait_for_next_poll(next_pending.len());
         pending = next_pending;
     }
+}
+
+fn should_keep_waiting(
+    wait: bool,
+    remote_state: RequestRemoteState,
+    availability: &[ScinetAvailability],
+) -> bool {
+    wait && availability.is_empty()
+        && matches!(
+            remote_state,
+            RequestRemoteState::Pending | RequestRemoteState::Working
+        )
 }
 
 fn fetch_text_line(output: &FetchOutput) -> String {
@@ -278,6 +290,32 @@ mod tests {
                 url: "https://sci-hub.example/10.1000/one".to_string(),
             }]
         );
+        assert!(outputs[0].path.is_none());
+    }
+
+    #[test]
+    fn fetch_wait_stops_polling_not_found_targets() {
+        let dois = vec!["10.1000/missing".to_string()];
+        let mut calls = 0;
+
+        let outputs = fetch_until_complete(
+            &dois,
+            true,
+            |_| {
+                calls += 1;
+                Ok(FetchResult::NoPdf {
+                    remote_state: RequestRemoteState::NotFound,
+                    availability: Vec::new(),
+                    availability_links: Vec::new(),
+                })
+            },
+            |_| panic!("not-found fetch should not sleep"),
+        )
+        .unwrap();
+
+        assert_eq!(calls, 1);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].remote_state, RequestRemoteState::NotFound);
         assert!(outputs[0].path.is_none());
     }
 

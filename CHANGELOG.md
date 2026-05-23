@@ -23,6 +23,8 @@
   them.
 - Synced local queue state when Sci-Net rejects a request for a DOI whose
   request page already exists remotely.
+- Reported `not-found` for generic Sci-Net pages that do not match the target
+  DOI, and avoided syncing those pages into the local queue.
 - Closed waited `snq login` browser sessions gracefully after login detection so
   fresh authentication state can be reused by later headless commands.
 - Surfaced Sci-Net request error reasons when response bodies include them.

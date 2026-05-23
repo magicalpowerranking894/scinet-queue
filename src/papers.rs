@@ -108,14 +108,16 @@ pub(crate) fn fetch_one(
     out_dir: &Path,
 ) -> Result<FetchResult, String> {
     let view = view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
-    let remote_state = view.remote_state();
+    let remote_state = view.remote_state_for_doi(doi);
 
     if remote_state == RequestRemoteState::LoggedOut {
         return Err("not logged into Sci-Net; run `snq login` first".to_string());
     }
 
     let Some(pdf_url) = view.pdf_urls.first() else {
-        sync_status_from_remote(queue, doi, remote_state)?;
+        if remote_state != RequestRemoteState::NotFound {
+            sync_status_from_remote(queue, doi, remote_state)?;
+        }
 
         let availability = scinet_availability(page, doi)?;
         return Ok(FetchResult::NoPdf {
@@ -605,6 +607,59 @@ mod tests {
     }
 
     #[test]
+    fn direct_fetch_unmatched_page_does_not_create_queue_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-direct-fetch-not-found-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = UnmatchedPageSession { calls: 0 };
+
+        let result = fetch_one(&queue, &mut page, "10.1000/snq-missing", &dir).unwrap();
+
+        match result {
+            FetchResult::NoPdf {
+                remote_state,
+                availability,
+                availability_links,
+            } => {
+                assert_eq!(remote_state, RequestRemoteState::NotFound);
+                assert!(availability.is_empty());
+                assert!(availability_links.is_empty());
+            }
+            FetchResult::Fetched(_) => panic!("expected no PDF"),
+        }
+
+        assert!(queue.list().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fetch_unmatched_page_does_not_promote_queued_entry() {
+        let dir =
+            std::env::temp_dir().join(format!("snq-fetch-not-found-test-{}", std::process::id()));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let mut page = UnmatchedPageSession { calls: 0 };
+
+        queue.add("10.1000/snq-missing").unwrap();
+        let result = fetch_one(&queue, &mut page, "10.1000/snq-missing", &dir).unwrap();
+
+        match result {
+            FetchResult::NoPdf { remote_state, .. } => {
+                assert_eq!(remote_state, RequestRemoteState::NotFound);
+            }
+            FetchResult::Fetched(_) => panic!("expected no PDF"),
+        }
+
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Queued);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn fetch_reuses_existing_pdf_file() {
         let dir = std::env::temp_dir().join(format!(
             "snq-fetch-existing-pdf-test-{}",
@@ -770,6 +825,42 @@ mod tests {
                 _ => Err(crate::page::PageError::UnexpectedResponse(
                     serde_json::json!({ "error": "unexpected call" }),
                 )),
+            }
+        }
+
+        fn close_browser(&mut self) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+    }
+
+    struct UnmatchedPageSession {
+        calls: usize,
+    }
+
+    impl PageSession for UnmatchedPageSession {
+        fn navigate(&mut self, _url: &str) -> Result<(), crate::page::PageError> {
+            Ok(())
+        }
+
+        fn evaluate_json(
+            &mut self,
+            _expression: &str,
+        ) -> Result<serde_json::Value, crate::page::PageError> {
+            self.calls += 1;
+
+            if self.calls == 1 {
+                Ok(serde_json::json!({
+                    "title": "Sci-Net",
+                    "url": "https://sci-net.xyz/",
+                    "text": "library tokens request active requests",
+                    "pdf_urls": []
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "status": 200,
+                    "body": {}
+                }))
             }
         }
 

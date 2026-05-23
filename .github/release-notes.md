@@ -13,6 +13,8 @@ Highlights in the current build:
 - `balance` to print the visible Sci-Net token balance directly.
 - `request --budget-check` to fail before posting requests when visible token
   balance is too low.
+- `not-found` remote state for Sci-Net pages that do not match the target DOI,
+  without mutating the local queue.
 - Browser discovery for Chromium-compatible and Firefox/Gecko-based browsers
   without bundling a browser.
 - macOS app-bundle browser paths resolve to the bundle's declared executable.

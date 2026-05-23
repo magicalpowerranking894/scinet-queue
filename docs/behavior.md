@@ -32,13 +32,16 @@ still reject a later request if the site state changes.
 
 If Sci-Net rejects a request but the DOI's request page already exists and is
 visible in the managed session, `snq` treats that as an existing remote request
-and syncs the local queue instead of leaving it queued.
+and syncs the local queue instead of leaving it queued. The page must match the
+target DOI; a redirect to a generic Sci-Net page is reported as `not-found` and
+does not update the local queue.
 
 Observed request page states:
 
 - `pending`: no visible solver and no PDF link.
 - `working`: a member is working on the request.
 - `pdf`: a PDF link is visible on the request page.
+- `not-found`: the page did not match the requested DOI.
 - `logged-out`: the session is no longer authenticated.
 
 Local queue states:
@@ -46,8 +49,8 @@ Local queue states:
 | State | Meaning | Typical movement |
 | --- | --- | --- |
 | `queued` | DOI is known locally but no request has been confirmed. | `add`, `import`, or direct `fetch <doi>` setup |
-| `requested` | Sci-Net accepted or already has a visible pending request. | `request` |
-| `working` | Sci-Net reports someone is working on the request. | `watch`, `view`, or `fetch` sync from remote state |
+| `requested` | Sci-Net accepted or already has a visible pending request. | `request` or `fetch` sync from remote `pending` |
+| `working` | Sci-Net reports someone is working on the request. | `request`, `watch`, or `fetch` sync from remote `working` |
 | `fetched` | A request-page PDF was downloaded and validated locally. | `fetch` |
 | `approved` | The local operator marked the fetched PDF as reviewed. | `approve` |
 

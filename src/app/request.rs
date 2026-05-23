@@ -146,13 +146,13 @@ fn record_request_or_existing(
         }
         Err(error) => {
             let view = view_request(page, SCINET_URL, doi).map_err(|error| error.to_string())?;
-            let remote_state = view.remote_state();
+            let remote_state = view.remote_state_for_doi(doi);
 
             if remote_state == RequestRemoteState::LoggedOut {
                 return Err("not logged into Sci-Net; run `snq login` first".to_string());
             }
 
-            if !view.matches_doi(doi) {
+            if remote_state == RequestRemoteState::NotFound {
                 return Err(error);
             }
 
@@ -168,7 +168,7 @@ fn record_request_or_existing(
                     mark_requested(queue, doi)?;
                     QueueStatus::Requested
                 }
-                RequestRemoteState::LoggedOut => unreachable!(),
+                RequestRemoteState::LoggedOut | RequestRemoteState::NotFound => unreachable!(),
             };
 
             Ok((status, Some(remote_state)))
@@ -283,6 +283,72 @@ mod tests {
         assert_eq!(status, QueueStatus::Requested);
         assert_eq!(remote_state, Some(RequestRemoteState::Pending));
         assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Requested);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_request_syncs_existing_pdf_page_as_requested() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-request-existing-pdf-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let doi = "10.1000/snq-existing-pdf";
+
+        queue.add(doi).unwrap();
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "error": true }),
+        };
+        let mut page = FakePageSession::new(vec![serde_json::json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/10.1000/snq-existing-pdf",
+            "text": "doi 10.1000/snq-existing-pdf\nuploaded",
+            "pdf_urls": ["https://sci-net.xyz/storage/snq-existing-pdf.pdf"]
+        })]);
+
+        let (status, remote_state) =
+            record_request_or_existing(&mut page, &queue, doi, &response).unwrap();
+
+        assert_eq!(status, QueueStatus::Requested);
+        assert_eq!(remote_state, Some(RequestRemoteState::Pdf));
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Requested);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_request_syncs_existing_working_page() {
+        let dir = std::env::temp_dir().join(format!(
+            "snq-request-existing-working-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("queue.jsonl");
+        let queue = Queue::new(path);
+        let doi = "10.1000/snq-existing-working";
+
+        queue.add(doi).unwrap();
+        let response = ScinetResponse {
+            ok: true,
+            status: 200,
+            body: serde_json::json!({ "error": true }),
+        };
+        let mut page = FakePageSession::new(vec![serde_json::json!({
+            "title": "Sci-Net",
+            "url": "https://sci-net.xyz/10.1000/snq-existing-working",
+            "text": "doi 10.1000/snq-existing-working\nA member is working on solving this request.",
+            "pdf_urls": []
+        })]);
+
+        let (status, remote_state) =
+            record_request_or_existing(&mut page, &queue, doi, &response).unwrap();
+
+        assert_eq!(status, QueueStatus::Working);
+        assert_eq!(remote_state, Some(RequestRemoteState::Working));
+        assert_eq!(queue.list().unwrap()[0].status, QueueStatus::Working);
 
         let _ = fs::remove_dir_all(dir);
     }

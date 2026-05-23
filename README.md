@@ -125,8 +125,11 @@ snq balance
 snq request --all --reward 1 --budget-check
 ```
 
-If Sci-Net reports that a request cannot be created but the DOI already has a
-visible request page, `snq` syncs the local queue to that remote state.
+If Sci-Net reports that a request cannot be created but `snq` can see the same
+DOI on an existing request page, `snq` syncs the local queue to that remote
+state. A remote `pending` request becomes local `requested`; a remote `working`
+request becomes local `working`. A remote page with a PDF link remains local
+`requested` until `snq fetch` downloads and validates the file.
 
 Watch requested and working entries for visible PDF uploads:
 
@@ -159,6 +162,11 @@ is downloadable yet, `snq fetch` reports that availability instead of treating
 the DOI as simply pending. `snq` does not download from publisher pages,
 open-access repositories, or Sci-Hub itself. In JSON output, resolved provider
 URLs are included when Sci-Net exposes them.
+
+If `snq fetch <doi>` sees an existing pending Sci-Net request for the same DOI,
+it creates or updates the local queue entry as `requested`. If Sci-Net redirects
+to a generic page that does not match the DOI, the remote state is reported as
+`not-found` and the queue is left unchanged.
 
 Keep polling until every targeted DOI reaches an actionable outcome: a
 downloadable request-page PDF, or a Sci-Net availability hint such as
@@ -218,6 +226,25 @@ Example `snq watch --json` output:
     "doi": "10.1000/snq-example",
     "status": "working",
     "remote_state": "pdf"
+  }
+]
+```
+
+Example `snq request --json` output when Sci-Net already has a pending request:
+
+```json
+[
+  {
+    "doi": "10.1000/snq-example",
+    "status": "requested",
+    "remote_state": "pending",
+    "response": {
+      "ok": true,
+      "status": 200,
+      "body": {
+        "error": true
+      }
+    }
   }
 ]
 ```

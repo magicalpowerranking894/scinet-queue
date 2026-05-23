@@ -50,6 +50,7 @@ pub(crate) struct ScinetAvailabilityLink {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum RequestRemoteState {
     LoggedOut,
+    NotFound,
     Pdf,
     Working,
     Pending,
@@ -84,6 +85,16 @@ impl RequestView {
         }
 
         RequestRemoteState::Pending
+    }
+
+    pub(crate) fn remote_state_for_doi(&self, doi: &str) -> RequestRemoteState {
+        let state = self.remote_state();
+
+        if matches!(state, RequestRemoteState::LoggedOut) || self.matches_doi(doi) {
+            state
+        } else {
+            RequestRemoteState::NotFound
+        }
     }
 
     pub(crate) fn matches_doi(&self, doi: &str) -> bool {
@@ -138,6 +149,7 @@ impl RequestRemoteState {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             RequestRemoteState::LoggedOut => "logged-out",
+            RequestRemoteState::NotFound => "not-found",
             RequestRemoteState::Pdf => "pdf",
             RequestRemoteState::Working => "working",
             RequestRemoteState::Pending => "pending",
@@ -610,6 +622,36 @@ mod tests {
         };
 
         assert!(view.matches_doi(doi));
+    }
+
+    #[test]
+    fn request_view_reports_not_found_for_unmatched_page() {
+        let view = RequestView {
+            title: "Sci-Net".to_string(),
+            url: SCINET_URL.to_string(),
+            text: "library tokens request active requests".to_string(),
+            pdf_urls: Vec::new(),
+        };
+
+        assert_eq!(
+            view.remote_state_for_doi("10.1000/snq-missing"),
+            RequestRemoteState::NotFound
+        );
+    }
+
+    #[test]
+    fn request_view_keeps_matching_pending_state() {
+        let view = RequestView {
+            title: "Sci-Net: Pending".to_string(),
+            url: "https://sci-net.xyz/request".to_string(),
+            text: "Reward: 1 token 10.1000/snq-existing".to_string(),
+            pdf_urls: Vec::new(),
+        };
+
+        assert_eq!(
+            view.remote_state_for_doi("10.1000/snq-existing"),
+            RequestRemoteState::Pending
+        );
     }
 
     #[test]

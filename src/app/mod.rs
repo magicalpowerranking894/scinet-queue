@@ -266,7 +266,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let mut output = Vec::new();
 
             for (entry, view) in entries.iter().zip(views.iter()) {
-                let remote_state = view.remote_state();
+                let remote_state = view.remote_state_for_doi(&entry.doi);
                 let status =
                     update_status_from_remote(&queue, entry.status, &entry.doi, remote_state)?;
 
@@ -294,7 +294,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let mut views =
                 with_scinet_views(std::iter::once(view_args.doi.as_str()), !view_args.json)?;
             let view = views.remove(0);
-            let state = view.remote_state();
+            let state = view.remote_state_for_doi(&view_args.doi);
             let output = ViewOutput {
                 url: view.url,
                 title: view.title,

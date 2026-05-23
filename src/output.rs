@@ -192,4 +192,30 @@ mod tests {
         );
         assert!(value["path"].is_null());
     }
+
+    #[test]
+    fn request_output_includes_existing_remote_state() {
+        let output = RequestOutput {
+            doi: "10.1000/snq-example".to_string(),
+            status: QueueStatus::Requested,
+            remote_state: Some(RequestRemoteState::Pending),
+            response: ScinetResponse {
+                ok: true,
+                status: 200,
+                body: serde_json::json!({ "error": true }),
+            },
+        };
+        let value = serde_json::to_value(output).unwrap();
+
+        assert_eq!(value["status"], "requested");
+        assert_eq!(value["remote_state"], "pending");
+    }
+
+    #[test]
+    fn remote_state_serializes_not_found() {
+        assert_eq!(
+            serde_json::to_value(RequestRemoteState::NotFound).unwrap(),
+            serde_json::json!("not-found")
+        );
+    }
 }
