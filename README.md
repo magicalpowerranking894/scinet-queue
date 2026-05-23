@@ -276,6 +276,9 @@ For scripts or agents, set the path explicitly:
 snq browsers --set /path/to/browser
 ```
 
+On macOS, `/Applications/Firefox.app`-style app bundle paths and concrete
+`Contents/MacOS/...` executable paths are both accepted.
+
 The workspace browser preference is stored in `.snq/browser.json`. It is local
 to the current workspace, checked every time it is used, and can be removed
 with:

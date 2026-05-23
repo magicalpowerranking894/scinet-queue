@@ -223,7 +223,17 @@ fn infer_engine(path: &Path) -> BrowserEngine {
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    if name.contains("firefox") || name.contains("zen") {
+    if [
+        "firefox",
+        "zen",
+        "librewolf",
+        "waterfox",
+        "floorp",
+        "icecat",
+    ]
+    .into_iter()
+    .any(|engine| name.contains(engine))
+    {
         BrowserEngine::Firefox
     } else {
         BrowserEngine::Chromium
@@ -309,12 +319,60 @@ fn app_bundle_executable(path: &Path) -> Option<PathBuf> {
     }
 
     let executable_dir = path.join("Contents/MacOS");
+    if let Some(name) = bundle_executable_name(&path.join("Contents/Info.plist")) {
+        let executable = executable_dir.join(name);
+
+        if is_executable_file(&executable) {
+            return Some(executable);
+        }
+    }
+
+    for name in app_bundle_executable_name_candidates(path) {
+        let executable = executable_dir.join(name);
+
+        if is_executable_file(&executable) {
+            return Some(executable);
+        }
+    }
 
     fs::read_dir(executable_dir)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .find(|path| is_executable_file(path))
+}
+
+#[cfg(target_os = "macos")]
+fn bundle_executable_name(path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    let key_index = contents.find("<key>CFBundleExecutable</key>")?;
+    let contents = &contents[key_index..];
+    let start = contents.find("<string>")? + "<string>".len();
+    let contents = &contents[start..];
+    let end = contents.find("</string>")?;
+    let value = contents[..end].trim();
+
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_executable_name_candidates(path: &Path) -> Vec<String> {
+    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        return Vec::new();
+    };
+
+    let mut candidates = vec![stem.to_string(), stem.to_ascii_lowercase()];
+    match stem.to_ascii_lowercase().as_str() {
+        "firefox" => candidates.push("firefox".to_string()),
+        "zen" | "zen browser" => candidates.push("zen".to_string()),
+        "google chrome" => candidates.push("Google Chrome".to_string()),
+        "chromium" => candidates.push("Chromium".to_string()),
+        "brave browser" => candidates.push("Brave Browser".to_string()),
+        "microsoft edge" => candidates.push("Microsoft Edge".to_string()),
+        _ => {}
+    }
+
+    candidates
 }
 
 #[cfg(unix)]
@@ -439,18 +497,16 @@ mod tests {
 
     #[test]
     fn infers_firefox_like_browsers() {
-        assert_eq!(
-            infer_engine(Path::new(
-                "/Applications/Firefox.app/Contents/MacOS/firefox"
-            )),
-            BrowserEngine::Firefox
-        );
-        assert_eq!(
-            infer_engine(Path::new(
-                "/Applications/Zen Browser.app/Contents/MacOS/zen"
-            )),
-            BrowserEngine::Firefox
-        );
+        for path in [
+            "/Applications/Firefox.app/Contents/MacOS/firefox",
+            "/Applications/Zen Browser.app/Contents/MacOS/zen",
+            "/usr/bin/librewolf",
+            "/usr/bin/waterfox",
+            "/usr/bin/floorp",
+            "/usr/bin/icecat",
+        ] {
+            assert_eq!(infer_engine(Path::new(path)), BrowserEngine::Firefox);
+        }
     }
 
     #[test]
@@ -519,5 +575,44 @@ mod tests {
         assert_eq!(browser.path, path);
 
         let _ = fs::remove_file(browser.path);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn browser_from_path_uses_app_bundle_executable() {
+        let dir = env::temp_dir().join(format!("snq-browser-app-test-{}", std::process::id()));
+        let app = dir.join("Firefox.app");
+        let macos = app.join("Contents/MacOS");
+        fs::create_dir_all(&macos).unwrap();
+        fs::write(
+            app.join("Contents/Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>firefox</string>
+</dict>
+</plist>
+"#,
+        )
+        .unwrap();
+
+        let helper = macos.join("pingsender");
+        fs::write(&helper, "").unwrap();
+        let mut permissions = fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&helper, permissions).unwrap();
+
+        let executable = macos.join("firefox");
+        fs::write(&executable, "").unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+
+        let browser = browser_from_path(app.clone()).unwrap();
+
+        assert_eq!(browser.path, executable);
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

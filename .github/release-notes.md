@@ -15,4 +15,5 @@ Highlights in the current build:
   balance is too low.
 - Browser discovery for Chromium-compatible and Firefox/Gecko-based browsers
   without bundling a browser.
+- macOS app-bundle browser paths resolve to the bundle's declared executable.
 - Cross-platform CI/package validation for macOS, Linux, and Windows.
