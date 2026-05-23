@@ -117,18 +117,18 @@ jobs:
           $ErrorActionPreference = "Stop"
           $asset = "snq-$($env:TAG)-$($env:TARGET).zip"
           $smoke = Join-Path $env:RUNNER_TEMP "snq-smoke-$($env:TARGET)"
-          $home = Join-Path $smoke "home"
+          $smokeHome = Join-Path $smoke "home"
           $workspace = Join-Path $smoke "workspace"
 
-          New-Item -ItemType Directory -Force -Path $smoke, $home, $workspace | Out-Null
+          New-Item -ItemType Directory -Force -Path $smoke, $smokeHome, $workspace | Out-Null
           Expand-Archive -Path $asset -DestinationPath $smoke -Force
           if (!(Test-Path (Join-Path $smoke "snq.exe"))) { throw "snq.exe missing" }
           if (!(Test-Path (Join-Path $smoke "README.md"))) { throw "README.md missing" }
           if (!(Test-Path (Join-Path $smoke "LICENSE"))) { throw "LICENSE missing" }
           if (!(Test-Path (Join-Path $smoke "CHANGELOG.md"))) { throw "CHANGELOG.md missing" }
 
-          $env:HOME = $home
-          $env:USERPROFILE = $home
+          $env:HOME = $smokeHome
+          $env:USERPROFILE = $smokeHome
           $snq = Join-Path $smoke "snq.exe"
 
           if ((& $snq --version) -ne "snq $($env:TAG.TrimStart('v'))") { throw "version smoke failed" }
