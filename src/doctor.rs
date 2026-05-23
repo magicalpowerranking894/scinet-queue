@@ -210,19 +210,25 @@ pub(crate) fn print_doctor_report(report: &DoctorReport) {
 
 fn session_from_probe(probe: SessionProbe) -> DoctorSession {
     let logged_in = probe.is_logged_in();
+    let token_balance = if logged_in { probe.token_balance } else { None };
+    let (ok, phase, message) = match (logged_in, token_balance) {
+        (true, Some(_)) => (true, "authenticated", "logged in"),
+        (true, None) => (false, "balance", "logged in; token balance unknown"),
+        (false, _) => (
+            false,
+            "auth",
+            "not logged into Sci-Net; run `snq login` first",
+        ),
+    };
 
     DoctorSession {
-        ok: logged_in,
-        phase: if logged_in { "authenticated" } else { "auth" }.to_string(),
+        ok,
+        phase: phase.to_string(),
         logged_in: Some(logged_in),
-        token_balance: if logged_in { probe.token_balance } else { None },
+        token_balance,
         url: Some(probe.url),
         title: Some(probe.title),
-        message: if logged_in {
-            "logged in".to_string()
-        } else {
-            "not logged in; run `snq login`".to_string()
-        },
+        message: message.to_string(),
     }
 }
 
@@ -300,6 +306,25 @@ mod tests {
         assert!(!session.ok);
         assert_eq!(session.phase, "auth");
         assert_eq!(session.logged_in, Some(false));
+        assert_eq!(
+            session.message,
+            "not logged into Sci-Net; run `snq login` first"
+        );
+    }
+
+    #[test]
+    fn session_probe_warns_when_token_balance_is_unknown() {
+        let session = session_from_probe(SessionProbe {
+            title: "Sci-Net".to_string(),
+            url: "https://sci-net.xyz/".to_string(),
+            text: "tokens request library".to_string(),
+            token_balance: None,
+        });
+
+        assert!(!session.ok);
+        assert_eq!(session.phase, "balance");
+        assert_eq!(session.logged_in, Some(true));
+        assert_eq!(session.message, "logged in; token balance unknown");
     }
 
     #[test]

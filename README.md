@@ -117,7 +117,8 @@ snq request --all --reward 1
 
 If `--reward` is omitted, `snq` uses `1`.
 Add `--budget-check` to read the visible Sci-Net token balance first and fail
-before posting any request if the balance cannot cover the requested reward:
+before posting any request if the balance cannot be read or cannot cover
+`reward * targeted DOI count`:
 
 ```sh
 snq balance
